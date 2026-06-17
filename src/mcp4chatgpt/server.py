@@ -1,0 +1,210 @@
+from __future__ import annotations
+
+import json
+import ssl
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+from .audit import AuditLogger
+from .config import Config, load_config
+from .oauth import (
+    create_auth_redirect,
+    issue_token,
+    metadata,
+    protected_resource_metadata,
+    register_client,
+    render_authorize_form,
+    verify_token,
+)
+from .tools import ToolRegistry
+
+
+def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: Any) -> None:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _html_response(handler: BaseHTTPRequestHandler, status: int, body: bytes) -> None:
+    handler.send_response(status)
+    handler.send_header("Content-Type", "text/html; charset=utf-8")
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+def _auth_required(handler: BaseHTTPRequestHandler, config: Config, message: str) -> None:
+    body = json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
+    handler.send_response(401)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    handler.send_header("WWW-Authenticate", f'Bearer resource_metadata="{config.public_base_url}/.well-known/oauth-protected-resource"')
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
+_MAX_REQUEST_BYTES = 8 * 1024 * 1024  # 8 MB hard cap per request
+
+
+def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
+    raw_length = handler.headers.get("Content-Length", "0")
+    try:
+        length = int(raw_length)
+    except (ValueError, TypeError):
+        length = 0
+    if length <= 0:
+        return {}
+    if length > _MAX_REQUEST_BYTES:
+        raise ValueError(f"Request body too large ({length} bytes).")
+    raw = handler.rfile.read(length).decode("utf-8")
+    content_type = handler.headers.get("Content-Type", "")
+    if "application/x-www-form-urlencoded" in content_type:
+        return {k: v[-1] for k, v in parse_qs(raw).items()}
+    return json.loads(raw or "{}")
+
+
+def _make_error(code: int, message: str, request_id: Any = None) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def _make_result(result: Any, request_id: Any) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+class MCPServer(ThreadingHTTPServer):
+    config: Config
+    registry: ToolRegistry
+
+
+class Handler(BaseHTTPRequestHandler):
+    server: MCPServer
+
+    def log_message(self, fmt: str, *args: Any) -> None:
+        self.server.registry.audit.log("http", remote=self.client_address[0], message=fmt % args)
+
+    def do_GET(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path == "/health":
+            _json_response(self, 200, {"ok": True})
+            return
+        if parsed.path == "/.well-known/oauth-authorization-server":
+            _json_response(self, 200, metadata(self.server.config))
+            return
+        if parsed.path == "/.well-known/oauth-protected-resource":
+            _json_response(self, 200, protected_resource_metadata(self.server.config))
+            return
+        if parsed.path == "/oauth/authorize":
+            params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
+            _html_response(self, 200, render_authorize_form(params))
+            return
+        _json_response(self, 404, {"error": "not_found"})
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        try:
+            if parsed.path == "/oauth/register":
+                _json_response(self, 201, register_client(self.server.config, _read_json(self)))
+                return
+            if parsed.path == "/oauth/authorize":
+                payload = _read_json(self)
+                admin_secret = str(payload.pop("admin_secret", ""))
+                redirect = create_auth_redirect(self.server.config, {k: str(v) for k, v in payload.items()}, admin_secret)
+                self.send_response(302)
+                self.send_header("Location", redirect)
+                self.end_headers()
+                return
+            if parsed.path == "/oauth/token":
+                _json_response(self, 200, issue_token(self.server.config, _read_json(self)))
+                return
+            if parsed.path == "/mcp":
+                self._handle_mcp()
+                return
+            _json_response(self, 404, {"error": "not_found"})
+        except ValueError as exc:
+            # RFC 6749 §5.2: token-endpoint errors use a structured error object.
+            # For non-MCP OAuth routes we surface a generic invalid_request.
+            _json_response(self, 400, {"error": "invalid_request", "error_description": str(exc)})
+        except Exception:
+            _json_response(self, 500, {"error": "server_error", "error_description": "An internal error occurred."})
+
+    def _client_id(self) -> str:
+        auth = self.headers.get("Authorization", "")
+        if not auth.startswith("Bearer "):
+            raise ValueError("Missing Authorization: Bearer token.")
+        return verify_token(self.server.config, auth.removeprefix("Bearer ").strip())
+
+    def _handle_mcp(self) -> None:
+        # Keep auth at the transport boundary: no JSON-RPC method is allowed
+        # to run unless the bearer token has already been validated.
+        try:
+            client_id = self._client_id()
+        except Exception as exc:
+            _auth_required(self, self.server.config, str(exc))
+            return
+        request = _read_json(self)
+        method = request.get("method")
+        request_id = request.get("id")
+        params = request.get("params") or {}
+        self.server.registry.audit.log("mcp_request", client_id=client_id, method=method)
+        try:
+            if method == "initialize":
+                # Minimal MCP handshake. Tool capability discovery happens via
+                # tools/list so the server can keep protocol state stateless.
+                result = {
+                    "protocolVersion": params.get("protocolVersion", "2024-11-05"),
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "mcp4chatgpt", "version": "0.1.0"},
+                }
+            elif method == "notifications/initialized":
+                _json_response(self, 202, {})
+                return
+            elif method == "tools/list":
+                result = self.server.registry.list_tools()
+            elif method == "resources/list":
+                # ChatGPT Apps discovery probes resources even when the app
+                # is tool-only. Return an empty list rather than JSON-RPC
+                # method-not-found so discovery can continue cleanly.
+                result = {"resources": []}
+            elif method == "prompts/list":
+                result = {"prompts": []}
+            elif method == "tools/call":
+                result = self.server.registry.call_tool(params.get("name", ""), params.get("arguments") or {}, client_id)
+            else:
+                _json_response(self, 200, _make_error(-32601, f"Method not found: {method}", request_id))
+                return
+            _json_response(self, 200, _make_result(result, request_id))
+        except Exception as exc:
+            _json_response(self, 200, _make_error(-32000, str(exc), request_id))
+
+
+def create_server(config: Config | None = None) -> MCPServer:
+    config = config or load_config()
+    audit = AuditLogger(
+        config.audit_log,
+        rotate_bytes=config.log_rotate_bytes,
+        retention_days=config.log_retention_days,
+    )
+    registry = ToolRegistry(config, audit)
+    server = MCPServer((config.bind_host, config.bind_port), Handler)
+    server.config = config
+    server.registry = registry
+    return server
+
+
+def main() -> None:
+    config = load_config()
+    server = create_server(config)
+    if config.tls_cert_path and config.tls_key_path:
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+        ctx.load_cert_chain(config.tls_cert_path, config.tls_key_path)
+        server.socket = ctx.wrap_socket(server.socket, server_side=True)
+    print(f"mcp4chatgpt listening on {config.bind_host}:{config.bind_port}")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

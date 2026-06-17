@@ -1,0 +1,4 @@
+m6.ic2id.fun {
+	reverse_proxy 127.0.0.1:8766
+}
+

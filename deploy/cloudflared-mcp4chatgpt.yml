@@ -1,0 +1,7 @@
+tunnel: 1e2bf139-3d08-46a9-9480-fd43ed7b8a21
+credentials-file: /Users/vickers/.cloudflared/1e2bf139-3d08-46a9-9480-fd43ed7b8a21.json
+
+ingress:
+  - hostname: mcp.runzhe.uk
+    service: http://127.0.0.1:8766
+  - service: http_status:404

@@ -1,0 +1,216 @@
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any, Callable
+
+from . import __version__
+from .audit import AuditLogger
+from .config import Config
+from . import knowledge_ops, local_ops, terminal_ops, web_ops
+
+
+ToolHandler = Callable[[Config, dict[str, Any]], Any]
+
+
+@dataclass(frozen=True)
+class Tool:
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+    handler: ToolHandler
+
+    def definition(self) -> dict[str, Any]:
+        security_schemes = [{"type": "oauth2", "scopes": ["local", "web", "knowledge"]}]
+        annotations = _annotations_for_tool(self.name)
+        title = self.name.replace("_", " ").title()
+        return {
+            "name": self.name,
+            "title": title,
+            "description": self.description,
+            "inputSchema": self.input_schema,
+            "securitySchemes": security_schemes,
+            # ChatGPT still reads some descriptor data from _meta for
+            # compatibility; keep this mirrored with the public field.
+            "_meta": {
+                "securitySchemes": security_schemes,
+                "openai/toolInvocation/invoking": f"Running {title}",
+                "openai/toolInvocation/invoked": f"Finished {title}",
+            },
+            "annotations": annotations,
+        }
+
+
+def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    return {"type": "object", "properties": properties, "required": required or [], "additionalProperties": False}
+
+
+def _annotations_for_tool(name: str) -> dict[str, bool]:
+    """Classify tool side effects for ChatGPT's approval and safety UI.
+
+    These hints are advisory only; the server still enforces OAuth, path
+    allowlists, command blocking, and audit logging independently.
+    """
+    mutating = {
+        "local_write_file",
+        "local_apply_patch",
+        "local_run_command",
+        "terminal_run_command",
+        "terminal_send_input",
+        "web_add_to_knowledge",
+        "knowledge_add_source",
+    }
+    open_world = name.startswith("web_") or name in {
+        "local_run_command",
+        "terminal_run_command",
+        "terminal_send_input",
+    }
+    destructive = name in {"local_write_file", "local_apply_patch", "local_run_command", "terminal_run_command", "terminal_send_input"}
+    return {
+        "readOnlyHint": name not in mutating,
+        "destructiveHint": destructive,
+        "openWorldHint": open_world,
+        "idempotentHint": name not in mutating,
+    }
+
+
+def _ok(result: Any) -> dict[str, Any]:
+    text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2)
+    return {"content": [{"type": "text", "text": text}], "structuredContent": result}
+
+
+def _server_info(config: Config, _args: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": "mcp4chatgpt",
+        "version": __version__,
+        "mcp_url": config.mcp_url,
+        "allowed_roots": [str(root) for root in config.allowed_roots],
+        "knowledge_store_dir": str(config.knowledge_store_dir),
+        "firecrawl_configured": bool(config.firecrawl_api_key),
+        "co_te_path": str(config.co_te_path),
+    }
+
+
+def _web_add_to_knowledge(config: Config, args: dict[str, Any]) -> dict[str, Any]:
+    scraped = web_ops.scrape(config, args["url"], formats=["markdown"])
+    data = scraped.get("data", scraped)
+    text = data.get("markdown") or data.get("content") or json.dumps(data, ensure_ascii=False)
+    title = data.get("metadata", {}).get("title") or args.get("title") or args["url"]
+    added = knowledge_ops.add_source(config, title=title, text=text, url=args["url"], metadata={"web_result": data.get("metadata", {})})
+    return {"scrape": scraped, "knowledge": added}
+
+
+def build_tools() -> list[Tool]:
+    # The tool list is intentionally centralized. The HTTP layer only knows
+    # about JSON-RPC; capability grouping and schemas live here.
+    return [
+        Tool("server_info", "Return service status, enabled backends, and safety boundaries.", _schema({}), _server_info),
+        Tool(
+            "local_list_files",
+            "List files in an allowed local directory.",
+            _schema({"path": {"type": "string", "default": "."}, "max_entries": {"type": "integer", "default": 200}}),
+            lambda c, a: local_ops.list_files(c, a.get("path", "."), int(a.get("max_entries", 200))),
+        ),
+        Tool(
+            "local_read_text",
+            "Read a UTF-8 text file from an allowed local path.",
+            _schema({"path": {"type": "string"}, "max_chars": {"type": "integer"}}, ["path"]),
+            lambda c, a: local_ops.read_text(c, a["path"], a.get("max_chars")),
+        ),
+        Tool(
+            "local_write_file",
+            "Write a UTF-8 file under MCP_ALLOWED_ROOTS.",
+            _schema({"path": {"type": "string"}, "content": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["path", "content"]),
+            lambda c, a: local_ops.write_file(c, a["path"], a["content"], bool(a.get("overwrite", False))),
+        ),
+        Tool(
+            "local_apply_patch",
+            "Replace one exact text block in an allowed file and return a unified diff.",
+            _schema({"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}}, ["path", "old", "new"]),
+            lambda c, a: local_ops.apply_patch(c, a["path"], a["old"], a["new"]),
+        ),
+        Tool(
+            "local_run_command",
+            "Run a non-dangerous shell command in an allowed cwd.",
+            _schema({"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout_sec": {"type": "integer", "default": 30}}, ["command"]),
+            lambda c, a: local_ops.run_command(c, a["command"], a.get("cwd"), int(a.get("timeout_sec", 30))),
+        ),
+        Tool("local_git_status", "Run git status in an allowed repo.", _schema({"cwd": {"type": "string"}}, ["cwd"]), lambda c, a: local_ops.git_status(c, a["cwd"])),
+        Tool(
+            "local_git_diff",
+            "Run git diff in an allowed repo.",
+            _schema({"cwd": {"type": "string"}, "staged": {"type": "boolean", "default": False}, "max_chars": {"type": "integer"}}, ["cwd"]),
+            lambda c, a: local_ops.git_diff(c, a["cwd"], bool(a.get("staged", False)), a.get("max_chars")),
+        ),
+        Tool(
+            "local_git_log",
+            "Run git log --oneline in an allowed repo.",
+            _schema({"cwd": {"type": "string"}, "limit": {"type": "integer", "default": 20}}, ["cwd"]),
+            lambda c, a: local_ops.git_log(c, a["cwd"], int(a.get("limit", 20))),
+        ),
+        Tool(
+            "local_git_show",
+            "Run git show for a revision in an allowed repo.",
+            _schema({"cwd": {"type": "string"}, "rev": {"type": "string", "default": "HEAD"}, "max_chars": {"type": "integer"}}, ["cwd"]),
+            lambda c, a: local_ops.git_show(c, a["cwd"], a.get("rev", "HEAD"), a.get("max_chars")),
+        ),
+        Tool("terminal_list_supported_apps", "List supported macOS terminal apps.", _schema({}), lambda c, a: terminal_ops.list_supported_apps(c)),
+        Tool(
+            "terminal_get_app_context",
+            "Read recent context from Terminal.app, iTerm2, or Termius.",
+            _schema({"app": {"type": "string", "enum": ["terminal", "iterm2", "termius"]}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string"}}, ["app"]),
+            lambda c, a: terminal_ops.get_app_context(c, a["app"], int(a.get("max_chars", 12000)), bool(a.get("redact_secrets", True)), a.get("label")),
+        ),
+        Tool(
+            "terminal_run_command",
+            "Send a visible single-line command to the front Terminal.app/iTerm2/Termius tab.",
+            _schema({"command": {"type": "string"}, "app": {"type": "string", "enum": ["terminal", "iterm2", "termius"], "default": "terminal"}, "label": {"type": "string"}}, ["command"]),
+            lambda c, a: terminal_ops.run_command(c, a["command"], a.get("app", "terminal"), a.get("label")),
+        ),
+        Tool(
+            "terminal_send_input",
+            "Type text or a supported special key into Terminal.app/iTerm2/Termius.",
+            _schema({"text": {"type": "string"}, "press_return": {"type": "boolean", "default": True}, "sensitive": {"type": "boolean", "default": False}, "app": {"type": "string", "enum": ["terminal", "iterm2", "termius"], "default": "terminal"}, "label": {"type": "string"}}, ["text"]),
+            lambda c, a: terminal_ops.send_input(c, a["text"], bool(a.get("press_return", True)), bool(a.get("sensitive", False)), a.get("app", "terminal"), a.get("label")),
+        ),
+        Tool("web_search", "Search the web via Firecrawl.", _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]), lambda c, a: web_ops.search(c, a["query"], int(a.get("limit", 5)))),
+        Tool("web_scrape", "Scrape a web page via Firecrawl.", _schema({"url": {"type": "string"}, "formats": {"type": "array", "items": {"type": "string"}}}, ["url"]), lambda c, a: web_ops.scrape(c, a["url"], a.get("formats"))),
+        Tool("web_crawl", "Crawl a website via Firecrawl.", _schema({"url": {"type": "string"}, "limit": {"type": "integer", "default": 10}, "max_depth": {"type": "integer", "default": 2}}, ["url"]), lambda c, a: web_ops.crawl(c, a["url"], int(a.get("limit", 10)), int(a.get("max_depth", 2)))),
+        Tool("web_map", "Map URLs from a website via Firecrawl.", _schema({"url": {"type": "string"}, "limit": {"type": "integer", "default": 100}}, ["url"]), lambda c, a: web_ops.map_site(c, a["url"], int(a.get("limit", 100)))),
+        Tool("web_extract", "Extract structured data from URLs via Firecrawl.", _schema({"urls": {"type": "array", "items": {"type": "string"}}, "prompt": {"type": "string"}, "schema": {"type": "object"}}, ["urls"]), lambda c, a: web_ops.extract(c, a["urls"], a.get("prompt"), a.get("schema"))),
+        Tool("web_interact", "Interact with a web page via Firecrawl.", _schema({"url": {"type": "string"}, "prompt": {"type": "string"}, "actions": {"type": "array", "items": {"type": "object"}}}, ["url"]), lambda c, a: web_ops.interact(c, a["url"], a.get("prompt"), a.get("actions"))),
+        Tool("web_add_to_knowledge", "Scrape a URL and add its markdown to the local knowledge store.", _schema({"url": {"type": "string"}, "title": {"type": "string"}}, ["url"]), _web_add_to_knowledge),
+        Tool("knowledge_add_source", "Add a local file or supplied text to the knowledge store.", _schema({"path": {"type": "string"}, "title": {"type": "string"}, "text": {"type": "string"}, "url": {"type": "string"}, "metadata": {"type": "object"}}), lambda c, a: knowledge_ops.add_source(c, path=a.get("path"), title=a.get("title"), text=a.get("text"), url=a.get("url"), metadata=a.get("metadata"))),
+        Tool("knowledge_list_sources", "List knowledge sources.", _schema({}), lambda c, a: knowledge_ops.list_sources(c)),
+        Tool("knowledge_search", "Search source-grounded local knowledge chunks.", _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 8}}, ["query"]), lambda c, a: knowledge_ops.search(c, a["query"], int(a.get("limit", 8)))),
+        Tool("knowledge_fetch", "Fetch a full source or one source chunk.", _schema({"source_id": {"type": "string"}, "chunk_id": {"type": "string"}, "max_chars": {"type": "integer", "default": 12000}}, ["source_id"]), lambda c, a: knowledge_ops.fetch(c, a["source_id"], a.get("chunk_id"), int(a.get("max_chars", 12000)))),
+        Tool("knowledge_summarize", "Generate a source-grounded Markdown summary.", _schema({"source_id": {"type": "string"}, "max_points": {"type": "integer", "default": 8}}, ["source_id"]), lambda c, a: knowledge_ops.summarize(c, a["source_id"], int(a.get("max_points", 8)))),
+        Tool("knowledge_study_guide", "Generate a simple study guide from a source.", _schema({"source_id": {"type": "string"}}, ["source_id"]), lambda c, a: knowledge_ops.study_guide(c, a["source_id"])),
+        Tool("knowledge_quiz", "Generate quiz items from a source.", _schema({"source_id": {"type": "string"}, "count": {"type": "integer", "default": 5}}, ["source_id"]), lambda c, a: knowledge_ops.quiz(c, a["source_id"], int(a.get("count", 5)))),
+        Tool("knowledge_flashcards", "Generate flashcards from a source.", _schema({"source_id": {"type": "string"}, "count": {"type": "integer", "default": 10}}, ["source_id"]), lambda c, a: knowledge_ops.flashcards(c, a["source_id"], int(a.get("count", 10)))),
+    ]
+
+
+class ToolRegistry:
+    def __init__(self, config: Config, audit: AuditLogger):
+        self.config = config
+        self.audit = audit
+        self.tools = {tool.name: tool for tool in build_tools()}
+
+    def list_tools(self) -> dict[str, Any]:
+        return {"tools": [tool.definition() for tool in self.tools.values()]}
+
+    def call_tool(self, name: str, arguments: dict[str, Any], client_id: str = "") -> dict[str, Any]:
+        tool = self.tools.get(name)
+        if not tool:
+            raise ValueError(f"Unknown tool: {name}")
+        try:
+            # Each subsystem returns native structured data; _ok wraps it in
+            # MCP text content while preserving structuredContent for clients
+            # that can use it.
+            result = tool.handler(self.config, arguments or {})
+            self.audit.log("tool_call", tool=name, client_id=client_id, ok=True)
+            return _ok(result)
+        except Exception as exc:
+            self.audit.log("tool_call", tool=name, client_id=client_id, ok=False, error=str(exc))
+            raise
