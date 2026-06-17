@@ -166,6 +166,13 @@ class CoreTests(unittest.TestCase):
         # unknown key must be silently dropped (not whitelisted)
         self.assertNotIn("unknown_injected", html)
 
+    def test_redact_does_not_overmatch_plain_words(self) -> None:
+        from mcp4chatgpt.safety import redact
+
+        self.assertEqual(redact("secretary=foo"), "secretary=foo")
+        self.assertEqual(redact("notsecret=foo"), "notsecret=foo")
+        self.assertEqual(redact("MCP_AUTH_SECRET=foobar"), "MCP_AUTH_SECRET=[REDACTED]")
+
     def test_tool_schema_contains_expected_tools(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))

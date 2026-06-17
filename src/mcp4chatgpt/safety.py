@@ -9,7 +9,10 @@ SECRET_PATTERNS = [
     re.compile(r"(ghp_[A-Za-z0-9_]{20,})"),
     re.compile(r"(github_pat_[A-Za-z0-9_]{20,})"),
     re.compile(r"((?:AKIA|ASIA)[A-Z0-9]{16})"),
-    re.compile(r"(?i)([a-z0-9_\-]*(?:password|passwd|token|api[_-]?key|secret)[a-z0-9_\-]*)\s*=\s*([^\s]+)"),
+    # Keep this tight so ordinary words such as "secretary" are not redacted.
+    # Only redact likely configuration-style keys with separators around the
+    # sensitive token name.
+    re.compile(r"(?i)(?:^|[^A-Za-z0-9])([A-Za-z0-9_-]*?[_-])(password|passwd|token|api[_-]?key|secret)(?:[_-])?([A-Za-z0-9_-]*?)(\s*[:=]\s*)([^\s,;\"']+)"),
 ]
 
 DANGEROUS_COMMAND_PATTERNS = [
@@ -29,7 +32,11 @@ DANGEROUS_COMMAND_PATTERNS = [
 def redact(text: str) -> str:
     redacted = text
     for pattern in SECRET_PATTERNS:
-        if pattern.groups >= 2:
+        if pattern.groups >= 5:
+            redacted = pattern.sub(r"\1\2\3\4[REDACTED]", redacted)
+        elif pattern.groups >= 3:
+            redacted = pattern.sub(r"\1\2[REDACTED]", redacted)
+        elif pattern.groups >= 2:
             redacted = pattern.sub(r"\1=[REDACTED]", redacted)
         else:
             redacted = pattern.sub("[REDACTED]", redacted)
