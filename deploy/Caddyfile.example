@@ -1,4 +1,6 @@
+# Legacy IPv6/DDNS Caddy example for m6.ic2id.fun.
+# Current recommended ChatGPT Web deployment uses Cloudflare Tunnel on
+# https://mcp.runzhe.uk, not this Caddy path.
 m6.ic2id.fun {
 	reverse_proxy 127.0.0.1:8766
 }
-

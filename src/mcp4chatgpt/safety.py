@@ -9,10 +9,14 @@ SECRET_PATTERNS = [
     re.compile(r"(ghp_[A-Za-z0-9_]{20,})"),
     re.compile(r"(github_pat_[A-Za-z0-9_]{20,})"),
     re.compile(r"((?:AKIA|ASIA)[A-Z0-9]{16})"),
-    # Keep this tight so ordinary words such as "secretary" are not redacted.
-    # Only redact likely configuration-style keys with separators around the
-    # sensitive token name.
-    re.compile(r"(?i)(?:^|[^A-Za-z0-9])([A-Za-z0-9_-]*?[_-])(password|passwd|token|api[_-]?key|secret)(?:[_-])?([A-Za-z0-9_-]*?)(\s*[:=]\s*)([^\s,;\"']+)"),
+    re.compile(r"(?i)(Authorization)(\s*:\s*(?:Bearer|Basic)\s+)([^\s,;\"\']+)"),
+    # Pattern A – bare keyword form: password=, api_key=, token=
+    # Requires the keyword to be at start-of-line or after a non-word char so
+    # "notsecret" and "secretary" are NOT matched.
+    re.compile(r"(?i)(?:(?:^|(?<=[^A-Za-z0-9_]))(password|passwd|api[_-]?key|secret|token))(\s*[:=]\s*)([^\s,;\"\']+)"),
+    # Pattern B – env-var prefixed form: MCP_AUTH_SECRET=, FIRECRAWL_API_KEY=
+    # The prefix guarantees we are inside a config key name, not prose.
+    re.compile(r"(?i)([A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*[_-](?:password|passwd|api[_-]?key|secret|token)(?:[_-][A-Za-z0-9]+)*)(\s*[:=]\s*)([^\s,;\"\']+)"),
 ]
 
 DANGEROUS_COMMAND_PATTERNS = [
@@ -32,13 +36,11 @@ DANGEROUS_COMMAND_PATTERNS = [
 def redact(text: str) -> str:
     redacted = text
     for pattern in SECRET_PATTERNS:
-        if pattern.groups >= 5:
-            redacted = pattern.sub(r"\1\2\3\4[REDACTED]", redacted)
-        elif pattern.groups >= 3:
+        if pattern.groups == 3:
+            # (key)(sep)(value) -> keep key+sep, replace value
             redacted = pattern.sub(r"\1\2[REDACTED]", redacted)
-        elif pattern.groups >= 2:
-            redacted = pattern.sub(r"\1=[REDACTED]", redacted)
         else:
+            # single-group token patterns
             redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
 

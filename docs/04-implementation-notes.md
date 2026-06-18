@@ -22,6 +22,17 @@ This implementation is a first full-ops backend for ChatGPT Web, not a paste-onl
 
 ## Deployment Shape
 
+Current recommended deployment:
+
+```text
+ChatGPT Web
+  -> https://mcp.runzhe.uk/mcp
+  -> Cloudflare Tunnel
+  -> mcp4chatgpt on 127.0.0.1:8766
+```
+
+Legacy IPv6/DDNS deployment retained for reference only:
+
 ```text
 ChatGPT Web
   -> https://m6.ic2id.fun/mcp
@@ -29,5 +40,5 @@ ChatGPT Web
   -> mcp4chatgpt on 127.0.0.1:8766
 ```
 
-`ddns-go` already maintains the AAAA record for `m6.ic2id.fun`.
-
+`ddns-go` may maintain the AAAA record for `m6.ic2id.fun`, but that path is not
+the recommended ChatGPT Web connector route.

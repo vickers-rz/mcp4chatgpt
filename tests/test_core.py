@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import json
+import subprocess
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from mcp4chatgpt.audit import AuditLogger
@@ -60,6 +63,72 @@ class CoreTests(unittest.TestCase):
             result = local_ops.run_command(config, "printf hello", cwd=str(config.allowed_roots[0]))
             self.assertEqual(result["exit_code"], 0)
             self.assertEqual(result["stdout"], "hello")
+            command_log = config.audit_log.parent / "commands.jsonl"
+            self.assertTrue(command_log.exists())
+            entry = json.loads(command_log.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(entry["tool"], "local_run_command")
+            self.assertEqual(entry["command"], "printf hello")
+            self.assertEqual(entry["stdout"], "hello")
+            self.assertEqual(entry["exit_code"], 0)
+            self.assertTrue(entry["ok"])
+
+    def test_failed_local_command_writes_log(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            result = local_ops.run_command(config, "printf nope >&2; exit 7", cwd=str(config.allowed_roots[0]))
+            self.assertEqual(result["exit_code"], 7)
+            command_log = config.audit_log.parent / "commands.jsonl"
+            entry = json.loads(command_log.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertEqual(entry["exit_code"], 7)
+            self.assertFalse(entry["ok"])
+            self.assertIn("nope", entry["stderr"])
+
+    def test_local_command_log_truncates_long_output(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), max_output_chars=20)
+            local_ops.run_command(config, "printf 123456789012345678901234567890", cwd=str(config.allowed_roots[0]))
+            command_log = config.audit_log.parent / "commands.jsonl"
+            entry = json.loads(command_log.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertTrue(entry["truncated"])
+            self.assertIn("[truncated]", entry["stdout"])
+
+    def test_timeout_local_command_writes_log(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            with self.assertRaises(subprocess.TimeoutExpired):
+                local_ops.run_command(config, "sleep 2", cwd=str(config.allowed_roots[0]), timeout_sec=1)
+            command_log = config.audit_log.parent / "commands.jsonl"
+            entry = json.loads(command_log.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertIsNone(entry["exit_code"])
+            self.assertFalse(entry["ok"])
+            self.assertEqual(entry["timeout_sec"], 1)
+            self.assertIn("timed out", entry["stderr"])
+
+    def test_local_command_log_redacts_secrets(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            local_ops.run_command(config, "printf 'Authorization: Bearer abc123'", cwd=str(config.allowed_roots[0]))
+            command_log = config.audit_log.parent / "commands.jsonl"
+            entry = json.loads(command_log.read_text(encoding="utf-8").splitlines()[-1])
+            self.assertNotIn("abc123", entry["command"])
+            self.assertNotIn("abc123", entry["stdout"])
+            self.assertIn("[REDACTED]", entry["command"])
+            self.assertIn("[REDACTED]", entry["stdout"])
+
+    def test_local_command_log_tail_returns_recent_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            empty = local_ops.tail_command_log(config, limit=20)
+            self.assertEqual(empty["entries"], [])
+            self.assertEqual(empty["order"], "oldest_to_newest")
+
+            local_ops.run_command(config, "printf first", cwd=str(config.allowed_roots[0]))
+            local_ops.run_command(config, "printf second", cwd=str(config.allowed_roots[0]))
+
+            tailed = local_ops.tail_command_log(config, limit=1)
+            self.assertEqual(tailed["order"], "oldest_to_newest")
+            self.assertEqual(len(tailed["entries"]), 1)
+            self.assertEqual(tailed["entries"][0]["stdout"], "second")
 
     def test_knowledge_add_search_fetch(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -69,6 +138,39 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(results["results"][0]["source_id"], added["source_id"])
             fetched = knowledge_ops.fetch(config, added["source_id"])
             self.assertIn("Alpha", fetched["text"])
+
+    def test_corrupt_knowledge_store_is_quarantined_before_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            from mcp4chatgpt.knowledge_ops import _load_store, _store_path
+
+            store_path = _store_path(config)
+            store_path.write_text("{not json", encoding="utf-8")
+
+            self.assertEqual(_load_store(config), {"sources": {}})
+            self.assertFalse(store_path.exists())
+            backups = list(store_path.parent.glob("sources.json.corrupt.*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "{not json")
+
+            added = knowledge_ops.add_source(config, title="New", text="fresh source")
+            self.assertTrue(store_path.exists())
+            self.assertEqual(len(list(store_path.parent.glob("sources.json.corrupt.*"))), 1)
+            self.assertEqual(_load_store(config)["sources"][added["source_id"]]["title"], "New")
+
+    def test_invalid_knowledge_store_shape_is_quarantined(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            from mcp4chatgpt.knowledge_ops import _load_store, _store_path
+
+            store_path = _store_path(config)
+            store_path.write_text('{"sources": []}', encoding="utf-8")
+
+            self.assertEqual(_load_store(config), {"sources": {}})
+            self.assertFalse(store_path.exists())
+            backups = list(store_path.parent.glob("sources.json.corrupt.*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), '{"sources": []}')
 
     def test_web_ops_unconfigured(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -90,6 +192,39 @@ class CoreTests(unittest.TestCase):
             }
             token = issue_token(config, {"code": code, "client_id": client["client_id"]})["access_token"]
             self.assertEqual(verify_token(config, token), client["client_id"])
+
+    def test_corrupt_oauth_clients_are_quarantined_before_reuse(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            from mcp4chatgpt.oauth import _clients_path, _load_clients
+
+            clients_path = _clients_path(config)
+            clients_path.write_text("{not json", encoding="utf-8")
+
+            self.assertEqual(_load_clients(config), {})
+            self.assertFalse(clients_path.exists())
+            backups = list(clients_path.parent.glob("oauth_clients.json.corrupt.*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "{not json")
+
+            client = register_client(config, {"redirect_uris": ["https://chat.openai.com/aip/callback"]})
+            self.assertTrue(clients_path.exists())
+            self.assertEqual(len(list(clients_path.parent.glob("oauth_clients.json.corrupt.*"))), 1)
+            self.assertIn(client["client_id"], _load_clients(config))
+
+    def test_invalid_oauth_clients_shape_is_quarantined(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            from mcp4chatgpt.oauth import _clients_path, _load_clients
+
+            clients_path = _clients_path(config)
+            clients_path.write_text("[]", encoding="utf-8")
+
+            self.assertEqual(_load_clients(config), {})
+            self.assertFalse(clients_path.exists())
+            backups = list(clients_path.parent.glob("oauth_clients.json.corrupt.*"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "[]")
 
     def test_oauth_code_expiry(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -169,9 +304,19 @@ class CoreTests(unittest.TestCase):
     def test_redact_does_not_overmatch_plain_words(self) -> None:
         from mcp4chatgpt.safety import redact
 
-        self.assertEqual(redact("secretary=foo"), "secretary=foo")
+        # Plain prose words must never be redacted (no assignment present)
+        self.assertEqual(redact("secretary of state"), "secretary of state")
         self.assertEqual(redact("notsecret=foo"), "notsecret=foo")
-        self.assertEqual(redact("MCP_AUTH_SECRET=foobar"), "MCP_AUTH_SECRET=[REDACTED]")
+        self.assertEqual(redact("secretaries=5"), "secretaries=5")
+
+        # Bare keyword forms (Pattern A) must be redacted
+        self.assertIn("[REDACTED]", redact("password=p@ssw0rd"))
+        self.assertIn("[REDACTED]", redact("api_key=supersecret"))
+        self.assertIn("[REDACTED]", redact("token=abc123"))
+
+        # Env-var prefixed forms (Pattern B) must be redacted
+        self.assertIn("[REDACTED]", redact("MCP_AUTH_SECRET=foobar"))
+        self.assertIn("[REDACTED]", redact("FIRECRAWL_API_KEY=fc-abc123xyz"))
 
     def test_tool_schema_contains_expected_tools(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -182,6 +327,18 @@ class CoreTests(unittest.TestCase):
             self.assertIn("knowledge_search", names)
             self.assertIn("terminal_get_app_context", names)
             self.assertIn("local_run_command", names)
+            self.assertIn("local_command_log_tail", names)
+
+    def test_command_and_terminal_tool_descriptions_are_explicit(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            registry = ToolRegistry(config, AuditLogger(config.audit_log))
+            tools = {tool["name"]: tool for tool in registry.list_tools()["tools"]}
+
+            self.assertIn("local execution log", tools["local_run_command"]["description"])
+            self.assertIn("background shell execution logs", tools["local_command_log_tail"]["description"])
+            self.assertIn("press Return", tools["terminal_run_command"]["description"])
+            self.assertIn("press_return=false", tools["terminal_send_input"]["description"])
 
     def test_audit_log_rotates_and_compresses(self) -> None:
         with tempfile.TemporaryDirectory() as d:

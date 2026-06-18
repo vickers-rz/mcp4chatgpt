@@ -12,7 +12,7 @@ docs/04  →  实现记录：当前 MCP4ChatGPT 就是"文档03"的落地
 docs/05  →  架构说明：当前架构的权威参考文档
 ```
 
-**项目本质**：一个跑在你 Mac 本地 `127.0.0.1:8766` 的 Python HTTP 服务，通过 Caddy → IPv6 → `m6.ic2id.fun` 暴露给 ChatGPT Web，让 ChatGPT 可以操作本地文件、执行命令、读写知识库、控制终端。
+**项目本质**：一个跑在你 Mac 本地 `127.0.0.1:8766` 的 Python HTTP 服务，当前推荐通过 Cloudflare Tunnel 暴露到 `https://mcp.runzhe.uk/mcp` 供 ChatGPT Web 连接，让 ChatGPT 可以操作本地文件、执行命令、读写知识库、控制终端。`m6.ic2id.fun` / Caddy / IPv6 是旧 IPv6/DDNS 路径，仅作为 legacy 备用说明保留。
 
 ### 四大能力组
 
@@ -71,10 +71,12 @@ docs/05  →  架构说明：当前架构的权威参考文档
 | Bug 4 | `scripts/start.sh` | 🟠 | ✅ 已修复 | 启动健康检查失败时静默错误且不清理残留进程（导致下次无法重启）。现改为等待循环轮询并确保失败时强杀僵尸进程并清空 pid 文件。 |
 | Bug 5 | `.env.example` | 🟡 | ✅ 已修复 | 模板文件中包含大量硬编码个人电脑路径。现已改为泛化的 `yourname` 占位符及空白路径搭配注释。 |
 | Bug 6 | `oauth.py` | 🟡 | ✅ 已修复 | `render_authorize_form` 生成授权表单时，`name` 属性未作转义，存在 XSS 风险。现已通过新增全局 HTML 转义工具函数以及属性白名单限制规避 XSS 风险。 |
+| Bug 7 | `knowledge_ops.py` / `oauth.py` | 🟡 | ✅ 已修复 | 损坏或结构异常的 JSON store 之前会被静默当作空数据，后续保存可能覆盖原文件。现已在加载失败时重命名为 `.corrupt.<timestamp>` 备份后再返回空结构。 |
 
 ### 单元测试与稳定性
 
-以上所有的安全漏洞（XSS 攻击等）和逻辑异常，均补充了相应的测试用例。目前核心单元测试 13/13 稳定通过：
+以上所有的安全漏洞（XSS 攻击等）和逻辑异常，均补充了相应的测试用例。目前核心单元测试覆盖 OAuth、知识库、HTTP MCP 握手、审计轮转、脱敏和损坏 JSON 隔离：
 * `test_oauth_code_expiry` 确保准确返回错误语义，禁止代码重用。
 * `test_list_sources_none_created_at` 验证知识库元数据兼容性。
 * `test_authorize_form_xss` 验证表单参数反射的完全实体化转移与白名单校验。
+* `test_corrupt_knowledge_store_is_quarantined_before_reuse` 和 `test_corrupt_oauth_clients_are_quarantined_before_reuse` 验证损坏 JSON 不会被后续保存静默覆盖。

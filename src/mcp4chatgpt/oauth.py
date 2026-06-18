@@ -26,11 +26,35 @@ def _clients_path(config: Config) -> Path:
     return config.data_dir / "oauth_clients.json"
 
 
+def _quarantine_corrupt_clients(path: Path) -> None:
+    if not path.exists():
+        return
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = path.with_name(f"{path.name}.corrupt.{stamp}")
+    counter = 1
+    while target.exists():
+        target = path.with_name(f"{path.name}.corrupt.{stamp}.{counter}")
+        counter += 1
+    try:
+        path.rename(target)
+    except OSError:
+        return
+
+
 def _load_clients(config: Config) -> dict[str, Any]:
     path = _clients_path(config)
     if not path.exists():
         return {}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        # Isolate a corrupted clients file before treating it as empty.
+        _quarantine_corrupt_clients(path)
+        return {}
+    if not isinstance(data, dict):
+        _quarantine_corrupt_clients(path)
+        return {}
+    return data
 
 
 def _save_clients(config: Config, clients: dict[str, Any]) -> None:

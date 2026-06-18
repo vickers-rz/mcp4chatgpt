@@ -131,9 +131,15 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "local_run_command",
-            "Run a non-dangerous shell command in an allowed cwd.",
+            "Run a non-dangerous shell command in an allowed cwd, returning stdout/stderr and writing a local execution log.",
             _schema({"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout_sec": {"type": "integer", "default": 30}}, ["command"]),
             lambda c, a: local_ops.run_command(c, a["command"], a.get("cwd"), int(a.get("timeout_sec", 30))),
+        ),
+        Tool(
+            "local_command_log_tail",
+            "Read recent background shell execution logs written by local_run_command.",
+            _schema({"limit": {"type": "integer", "default": 20}}),
+            lambda c, a: local_ops.tail_command_log(c, int(a.get("limit", 20))),
         ),
         Tool("local_git_status", "Run git status in an allowed repo.", _schema({"cwd": {"type": "string"}}, ["cwd"]), lambda c, a: local_ops.git_status(c, a["cwd"])),
         Tool(
@@ -163,13 +169,13 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "terminal_run_command",
-            "Send a visible single-line command to the front Terminal.app/iTerm2/Termius tab.",
+            "Send a visible command to the front Terminal.app/iTerm2/Termius tab and press Return.",
             _schema({"command": {"type": "string"}, "app": {"type": "string", "enum": ["terminal", "iterm2", "termius"], "default": "terminal"}, "label": {"type": "string"}}, ["command"]),
             lambda c, a: terminal_ops.run_command(c, a["command"], a.get("app", "terminal"), a.get("label")),
         ),
         Tool(
             "terminal_send_input",
-            "Type text or a supported special key into Terminal.app/iTerm2/Termius.",
+            "Type or paste text into Terminal.app/iTerm2/Termius; set press_return=false to paste without executing.",
             _schema({"text": {"type": "string"}, "press_return": {"type": "boolean", "default": True}, "sensitive": {"type": "boolean", "default": False}, "app": {"type": "string", "enum": ["terminal", "iterm2", "termius"], "default": "terminal"}, "label": {"type": "string"}}, ["text"]),
             lambda c, a: terminal_ops.send_input(c, a["text"], bool(a.get("press_return", True)), bool(a.get("sensitive", False)), a.get("app", "terminal"), a.get("label")),
         ),

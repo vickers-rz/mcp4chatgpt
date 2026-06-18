@@ -118,6 +118,38 @@ During OAuth authorization, enter `MCP_AUTH_SECRET` on the local approval form.
 
 `web_*` tools require `FIRECRAWL_API_KEY`. If it is missing, the tools remain visible but return `web_ops_not_configured`.
 
+## Command Execution Modes
+
+### Background Shell Mode
+
+Tool:
+
+- `local_run_command`
+
+Characteristics:
+
+- Runs in the background under an allowed cwd.
+- Does not display in the current Terminal window.
+- Returns stdout/stderr to ChatGPT.
+- Writes a local execution log to `logs/commands.jsonl`.
+
+Use `local_command_log_tail` to read recent background command logs through MCP.
+
+### Visible Terminal Mode
+
+Tools:
+
+- `terminal_run_command`
+- `terminal_send_input`
+
+Characteristics:
+
+- Writes into the front Terminal.app, iTerm2, or Termius tab.
+- The user can see the command or input in the real terminal window.
+- `terminal_run_command` sends a visible command and presses Return.
+- `terminal_send_input` can set `press_return=false` to paste without executing.
+- Best for explicit requests to run or paste something in the visible terminal.
+
 ## HTTPS Exposure
 
 Recommended:
@@ -131,8 +163,8 @@ Cloudflare Tunnel routes `https://mcp.runzhe.uk` to the local service at
 `http://127.0.0.1:8766`. Its config is in
 `deploy/cloudflared-mcp4chatgpt.yml`.
 
-The Caddy configs are retained as an older IPv6/DDNS deployment option, not the
-recommended ChatGPT Web path.
+The Caddy configs for `m6.ic2id.fun` are retained only as a legacy IPv6/DDNS
+deployment option, not the recommended ChatGPT Web path.
 
 The included launchd plist is a manual template only. It is configured with
 `RunAtLoad=false` and `KeepAlive=false` by default so it does not become a

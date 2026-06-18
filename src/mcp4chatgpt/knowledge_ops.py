@@ -20,11 +20,35 @@ def _store_path(config: Config) -> Path:
     return config.knowledge_store_dir / "sources.json"
 
 
+def _quarantine_corrupt_store(path: Path) -> None:
+    if not path.exists():
+        return
+    stamp = time.strftime("%Y%m%d-%H%M%S")
+    target = path.with_name(f"{path.name}.corrupt.{stamp}")
+    counter = 1
+    while target.exists():
+        target = path.with_name(f"{path.name}.corrupt.{stamp}.{counter}")
+        counter += 1
+    try:
+        path.rename(target)
+    except OSError:
+        return
+
+
 def _load_store(config: Config) -> dict[str, Any]:
     path = _store_path(config)
     if not path.exists():
         return {"sources": {}}
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        # Corrupted store is isolated before treating it as empty.
+        _quarantine_corrupt_store(path)
+        return {"sources": {}}
+    if not isinstance(data, dict) or not isinstance(data.get("sources"), dict):
+        _quarantine_corrupt_store(path)
+        return {"sources": {}}
+    return data
 
 
 def _save_store(config: Config, store: dict[str, Any]) -> None:

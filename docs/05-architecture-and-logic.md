@@ -14,10 +14,12 @@ MCP4ChatGPT is a ChatGPT Web connector backend for three related workflows:
 The public target URL is:
 
 ```text
-https://m6.ic2id.fun/mcp
+https://mcp.runzhe.uk/mcp
 ```
 
-The dynamic IPv6 DNS layer is handled outside this project by `ddns-go`.
+Cloudflare Tunnel routes that public HTTPS endpoint to the local service on
+`127.0.0.1:8766`. The older `m6.ic2id.fun` IPv6/DDNS + Caddy path is retained
+only as a legacy fallback, not the recommended deployment.
 
 ## Runtime Topology
 
@@ -26,9 +28,9 @@ ChatGPT Web
   |
   | HTTPS + OAuth bearer token
   v
-m6.ic2id.fun
+mcp.runzhe.uk
   |
-  | Caddy/nginx reverse proxy on [::]:443
+  | Cloudflare Tunnel
   v
 MCP4ChatGPT HTTP server on 127.0.0.1:8766
   |
@@ -96,6 +98,7 @@ Safety rules:
 - Paths must live under `MCP_ALLOWED_ROOTS`.
 - Command execution validates obvious dangerous command patterns before running.
 - Command output is redacted and truncated.
+- `local_run_command` writes redacted execution records to `logs/commands.jsonl`.
 - Git tools are read-only in v1.
 
 `local_apply_patch` is intentionally an exact-text replacement instead of a
@@ -175,9 +178,11 @@ Default paths:
 - OAuth clients: `data/oauth_clients.json`
 - Knowledge store: `data/knowledge/sources.json`
 - Audit log: `logs/audit.jsonl`
+- Background command log: `logs/commands.jsonl`
 
 Audit events include HTTP activity and tool-call success/failure. They do not
-record OAuth tokens or `terminal_send_input` sensitive text.
+record OAuth tokens or `terminal_send_input` sensitive text. Background command
+logs redact obvious secrets before writing command text, stdout, and stderr.
 
 ## OAuth Security Notes
 
@@ -215,7 +220,8 @@ Recommended deployment:
 4. Create or update the ChatGPT Web connector with OAuth and MCP URL `https://mcp.runzhe.uk/mcp`.
 
 `deploy/cloudflared-mcp4chatgpt.yml` is the active public-exposure template.
-`deploy/Caddyfile.example` is retained only for the older IPv6/DDNS path.
+`deploy/Caddyfile.example` is retained only for the older `m6.ic2id.fun`
+IPv6/DDNS Caddy path.
 `deploy/com.vickers.mcp4chatgpt.plist` is a starter template.
 The launchd template is intentionally not auto-starting; turn on `RunAtLoad`
 and `KeepAlive` only after you accept the background-service risk.

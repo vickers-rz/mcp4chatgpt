@@ -31,11 +31,11 @@ sleep 2
 
 if kill -0 "$pid" 2>/dev/null; then
   echo "Caddy proxy started: pid=$pid"
-  echo "Public health target: https://m6.ic2id.fun/health"
+  echo "Legacy IPv6/DDNS health target: https://m6.ic2id.fun/health"
+  echo "Recommended ChatGPT Web path uses Cloudflare Tunnel: https://mcp.runzhe.uk/mcp"
   exit 0
 fi
 
 echo "Caddy proxy failed to start. stderr:"
 sed -n '1,160p' "$ERR_LOG" 2>/dev/null || true
 exit 1
-
