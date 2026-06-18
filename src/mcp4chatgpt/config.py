@@ -63,6 +63,8 @@ class Config:
     log_rotate_bytes: int
     log_retention_days: int
     allowed_hosts: list[str]
+    ext_bridge_port: int
+    ext_screenshot_dir: Path
 
     @property
     def mcp_url(self) -> str:
@@ -98,6 +100,10 @@ def load_config() -> Config:
         if host not in allowed_hosts:
             allowed_hosts.append(host)
 
+    ext_screenshot_dir = Path(
+        os.environ.get("EXT_SCREENSHOT_DIR", data_dir / "screenshots")
+    ).expanduser().resolve()
+
     return Config(
         public_base_url=public_base_url,
         bind_host=bind_host,
@@ -117,4 +123,6 @@ def load_config() -> Config:
         log_rotate_bytes=int(os.environ.get("MCP_LOG_ROTATE_BYTES", str(20 * 1024 * 1024))),
         log_retention_days=int(os.environ.get("MCP_LOG_RETENTION_DAYS", "30")),
         allowed_hosts=allowed_hosts,
+        ext_bridge_port=int(os.environ.get("EXT_BRIDGE_PORT", "8765")),
+        ext_screenshot_dir=ext_screenshot_dir,
     )

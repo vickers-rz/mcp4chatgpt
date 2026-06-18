@@ -3,6 +3,25 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PID_FILE="$ROOT/tmp.service.pid"
+LAUNCHD_LABEL="com.vickers.mcp4chatgpt"
+LAUNCHD_SERVICE="gui/$(id -u)/$LAUNCHD_LABEL"
+TMUX_SESSION="mcp4chatgpt"
+
+if command -v tmux >/dev/null 2>&1 && tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+  tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+  rm -f "$PID_FILE"
+  echo "MCP4ChatGPT stopped"
+  exit 0
+fi
+
+if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+  if launchctl print "$LAUNCHD_SERVICE" >/dev/null 2>&1; then
+    launchctl bootout "$LAUNCHD_SERVICE" 2>/dev/null || true
+    rm -f "$PID_FILE"
+    echo "MCP4ChatGPT stopped"
+    exit 0
+  fi
+fi
 
 if [ ! -f "$PID_FILE" ]; then
   echo "MCP4ChatGPT is not running: no pid file"
@@ -29,4 +48,3 @@ done
 kill -9 "$pid" 2>/dev/null || true
 rm -f "$PID_FILE"
 echo "MCP4ChatGPT force-stopped"
-

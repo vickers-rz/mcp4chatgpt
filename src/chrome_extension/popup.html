@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MCP4ChatGPT Bridge</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <!-- Header -->
+  <header class="header">
+    <div class="logo">
+      <div class="logo-icon" id="logo-icon">⚡</div>
+      <div>
+        <div class="logo-title">MCP4ChatGPT</div>
+        <div class="logo-subtitle">Browser Bridge</div>
+      </div>
+    </div>
+    <div class="status-badge" id="status-badge">
+      <span class="status-dot" id="status-dot"></span>
+      <span id="status-text">Connecting…</span>
+    </div>
+  </header>
+
+  <!-- Connection Card -->
+  <section class="card" id="connection-card">
+    <div class="card-title">🔌 Bridge Connection</div>
+    <div class="field-row">
+      <label for="bridge-port">Port</label>
+      <input type="number" id="bridge-port" min="1024" max="65535" value="8765" />
+    </div>
+    <div class="field-row">
+      <label for="bridge-token">Token</label>
+      <div class="token-row">
+        <input type="password" id="bridge-token" placeholder="Paste token from server startup log" />
+        <button class="btn-icon" id="toggle-token" title="Show/hide token">👁</button>
+      </div>
+    </div>
+    <div class="token-hint" id="token-hint">
+      Copy the token shown in your terminal after <code>./MCP4ChatGPT.command</code> starts.
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-primary" id="btn-connect">Connect</button>
+      <button class="btn btn-ghost" id="btn-disconnect">Disconnect</button>
+    </div>
+  </section>
+
+  <!-- Permissions Card -->
+  <section class="card" id="permissions-card">
+    <div class="card-title">🛡️ Permissions</div>
+
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <div class="toggle-label">Read page content</div>
+        <div class="toggle-desc">Allow reading tab titles, URLs, and page text</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="perm-read" checked disabled />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <div class="toggle-label">Take screenshots</div>
+        <div class="toggle-desc">Allow capturing visible tab screenshots</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="perm-screenshot" checked disabled />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <div class="toggle-label">Navigate &amp; interact</div>
+        <div class="toggle-desc">Allow clicking, filling inputs, and navigation</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="perm-interact" checked disabled />
+        <span class="slider"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row highlight-row">
+      <div class="toggle-info">
+        <div class="toggle-label">⚠️ Allow JS execution</div>
+        <div class="toggle-desc">Allow <code>ext_run_js</code> to run arbitrary code. Enable only when needed.</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="perm-js" />
+        <span class="slider slider-danger"></span>
+      </label>
+    </div>
+
+    <div class="toggle-row">
+      <div class="toggle-info">
+        <div class="toggle-label">Auto-reconnect</div>
+        <div class="toggle-desc">Reconnect automatically if bridge drops</div>
+      </div>
+      <label class="toggle">
+        <input type="checkbox" id="perm-reconnect" checked />
+        <span class="slider"></span>
+      </label>
+    </div>
+  </section>
+
+  <!-- Info Card -->
+  <section class="card" id="info-card">
+    <div class="card-title">ℹ️ Status</div>
+    <div class="info-row">
+      <span class="info-label">Bridge port</span>
+      <span class="info-value" id="info-port">8765</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Token prefix</span>
+      <span class="info-value" id="info-token-prefix">—</span>
+    </div>
+    <div class="info-row">
+      <span class="info-label">Extension version</span>
+      <span class="info-value" id="info-version">—</span>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <a href="https://github.com/vickers/MCP4ChatGPT" target="_blank" class="footer-link">Docs &amp; Source</a>
+    <span class="footer-sep">·</span>
+    <span id="footer-status">Ready</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

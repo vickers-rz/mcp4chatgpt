@@ -6,12 +6,14 @@
 	<string>com.vickers.mcp4chatgpt</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/opt/homebrew/Cellar/python@3.14/3.14.5/Frameworks/Python.framework/Versions/3.14/bin/python3.14</string>
-		<string>-m</string>
-		<string>mcp4chatgpt.server</string>
+		<string>/Users/vickers/Documents/MCP_Creator/MCP4ChatGPT/scripts/dev.sh</string>
 	</array>
 	<key>EnvironmentVariables</key>
 	<dict>
+		<key>HOME</key>
+		<string>/Users/vickers</string>
+		<key>PATH</key>
+		<string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
 		<key>PYTHONPATH</key>
 		<string>/Users/vickers/Documents/MCP_Creator/MCP4ChatGPT/src</string>
 	</dict>

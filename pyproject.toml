@@ -3,7 +3,9 @@ name = "mcp4chatgpt"
 version = "0.1.0"
 description = "ChatGPT Web MCP server for local ops, web ops, and source-grounded knowledge workflows."
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+    "websockets>=12.0",
+]
 
 [project.optional-dependencies]
 dev = [

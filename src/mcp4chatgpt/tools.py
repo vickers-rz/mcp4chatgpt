@@ -7,7 +7,7 @@ from typing import Any, Callable
 from . import __version__
 from .audit import AuditLogger
 from .config import Config
-from . import knowledge_ops, local_ops, terminal_ops, web_ops
+from . import chrome_ops, ext_ops, knowledge_ops, local_ops, terminal_ops, web_ops
 
 
 ToolHandler = Callable[[Config, dict[str, Any]], Any]
@@ -59,13 +59,45 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "terminal_send_input",
         "web_add_to_knowledge",
         "knowledge_add_source",
+        "ext_navigate",
+        "ext_click_element",
+        "ext_fill_input",
+        "ext_run_js",
     }
     open_world = name.startswith("web_") or name in {
         "local_run_command",
         "terminal_run_command",
         "terminal_send_input",
+        "chrome_list_tabs",
+        "chrome_get_active_tab_context",
+        "browser_list_tabs",
+        "browser_current_tab",
+        "browser_get_page_text",
+        "browser_get_selection",
+        "browser_get_links",
+        "ext_connection_status",
+        "ext_list_tabs",
+        "ext_get_active_tab",
+        "ext_get_dom",
+        "ext_get_selection",
+        "ext_screenshot",
+        "ext_navigate",
+        "ext_click_element",
+        "ext_fill_input",
+        "ext_run_js",
+        "ext_listen_changes",
     }
-    destructive = name in {"local_write_file", "local_apply_patch", "local_run_command", "terminal_run_command", "terminal_send_input"}
+    destructive = name in {
+        "local_write_file",
+        "local_apply_patch",
+        "local_run_command",
+        "terminal_run_command",
+        "terminal_send_input",
+        "ext_navigate",
+        "ext_click_element",
+        "ext_fill_input",
+        "ext_run_js",
+    }
     return {
         "readOnlyHint": name not in mutating,
         "destructiveHint": destructive,
@@ -162,6 +194,59 @@ def build_tools() -> list[Tool]:
         ),
         Tool("terminal_list_supported_apps", "List supported macOS terminal apps.", _schema({}), lambda c, a: terminal_ops.list_supported_apps(c)),
         Tool(
+            "chrome_list_tabs",
+            "List titles and URLs for open Google Chrome tabs on this Mac. Does not read page body text.",
+            _schema({"max_tabs": {"type": "integer", "default": 80}}),
+            lambda c, a: chrome_ops.list_tabs(c, int(a.get("max_tabs", 80))),
+        ),
+        Tool(
+            "chrome_get_active_tab_context",
+            "Read the front Google Chrome tab title, URL, metadata, selection, and visible page text.",
+            _schema(
+                {
+                    "max_chars": {"type": "integer", "default": 12000},
+                    "include_text": {"type": "boolean", "default": True},
+                    "include_selection": {"type": "boolean", "default": True},
+                }
+            ),
+            lambda c, a: chrome_ops.get_active_tab_context(
+                c,
+                int(a.get("max_chars", 12000)),
+                bool(a.get("include_text", True)),
+                bool(a.get("include_selection", True)),
+            ),
+        ),
+        Tool(
+            "browser_list_tabs",
+            "Alias for chrome_list_tabs. List titles and URLs for open Google Chrome tabs on this Mac.",
+            _schema({"max_tabs": {"type": "integer", "default": 80}}),
+            lambda c, a: chrome_ops.list_tabs(c, int(a.get("max_tabs", 80))),
+        ),
+        Tool(
+            "browser_current_tab",
+            "Return the front Google Chrome tab title, URL, metadata, and selected text without body text.",
+            _schema({"max_chars": {"type": "integer", "default": 12000}}),
+            lambda c, a: chrome_ops.get_active_tab_context(c, int(a.get("max_chars", 12000)), False, True),
+        ),
+        Tool(
+            "browser_get_page_text",
+            "Read visible body text from the front Google Chrome tab.",
+            _schema({"max_chars": {"type": "integer", "default": 12000}}),
+            lambda c, a: chrome_ops.get_active_tab_context(c, int(a.get("max_chars", 12000)), True, False),
+        ),
+        Tool(
+            "browser_get_selection",
+            "Read selected text from the front Google Chrome tab.",
+            _schema({"max_chars": {"type": "integer", "default": 12000}}),
+            lambda c, a: chrome_ops.get_active_tab_context(c, int(a.get("max_chars", 12000)), False, True),
+        ),
+        Tool(
+            "browser_get_links",
+            "Read links from the front Google Chrome tab.",
+            _schema({"max_links": {"type": "integer", "default": 100}}),
+            lambda c, a: chrome_ops.get_links(c, int(a.get("max_links", 100))),
+        ),
+        Tool(
             "terminal_get_app_context",
             "Read recent context from Terminal.app, iTerm2, or Termius.",
             _schema({"app": {"type": "string", "enum": ["terminal", "iterm2", "termius"]}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string"}}, ["app"]),
@@ -194,6 +279,145 @@ def build_tools() -> list[Tool]:
         Tool("knowledge_study_guide", "Generate a simple study guide from a source.", _schema({"source_id": {"type": "string"}}, ["source_id"]), lambda c, a: knowledge_ops.study_guide(c, a["source_id"])),
         Tool("knowledge_quiz", "Generate quiz items from a source.", _schema({"source_id": {"type": "string"}, "count": {"type": "integer", "default": 5}}, ["source_id"]), lambda c, a: knowledge_ops.quiz(c, a["source_id"], int(a.get("count", 5)))),
         Tool("knowledge_flashcards", "Generate flashcards from a source.", _schema({"source_id": {"type": "string"}, "count": {"type": "integer", "default": 10}}, ["source_id"]), lambda c, a: knowledge_ops.flashcards(c, a["source_id"], int(a.get("count", 10)))),
+        # ------------------------------------------------------------------ #
+        # Browser Extension Tools (ext_*)                                     #
+        # Requires the MCP4ChatGPT Chrome extension to be installed and        #
+        # connected. Use ext_connection_status to check before calling others. #
+        # ------------------------------------------------------------------ #
+        Tool(
+            "ext_connection_status",
+            "Check whether the MCP4ChatGPT Chrome extension is connected to the bridge. Call this first before using any other ext_* tool.",
+            _schema({}),
+            lambda c, a: ext_ops.ext_connection_status(c),
+        ),
+        Tool(
+            "ext_list_tabs",
+            "List all open Chrome tabs (window ID, tab ID, URL, title, active status). Requires the MCP4ChatGPT Chrome extension.",
+            _schema({"max_tabs": {"type": "integer", "default": 100}}),
+            lambda c, a: ext_ops.ext_list_tabs(c, int(a.get("max_tabs", 100))),
+        ),
+        Tool(
+            "ext_get_active_tab",
+            "Read the front Chrome tab: title, URL, visible page text, selected text, and meta tags. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "max_chars": {"type": "integer", "default": 12000},
+                "include_text": {"type": "boolean", "default": True},
+                "include_selection": {"type": "boolean", "default": True},
+                "include_meta": {"type": "boolean", "default": True},
+            }),
+            lambda c, a: ext_ops.ext_get_active_tab(
+                c,
+                int(a.get("max_chars", 12000)),
+                bool(a.get("include_text", True)),
+                bool(a.get("include_selection", True)),
+                bool(a.get("include_meta", True)),
+            ),
+        ),
+        Tool(
+            "ext_get_dom",
+            "Get the outerHTML of a DOM element (default: body) from a Chrome tab. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "tab_id": {"type": "integer"},
+                "selector": {"type": "string", "default": "body"},
+                "max_chars": {"type": "integer", "default": 50000},
+            }),
+            lambda c, a: ext_ops.ext_get_dom(
+                c,
+                a.get("tab_id"),
+                str(a.get("selector", "body")),
+                int(a.get("max_chars", 50000)),
+            ),
+        ),
+        Tool(
+            "ext_get_selection",
+            "Get the currently selected text from a Chrome tab. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({"tab_id": {"type": "integer"}}),
+            lambda c, a: ext_ops.ext_get_selection(c, a.get("tab_id")),
+        ),
+        Tool(
+            "ext_screenshot",
+            "Take a screenshot of a Chrome tab and save it as a PNG file. Returns the file path. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "tab_id": {"type": "integer"},
+                "save_to_file": {"type": "boolean", "default": True},
+                "quality": {"type": "integer", "default": 80},
+            }),
+            lambda c, a: ext_ops.ext_screenshot(
+                c,
+                a.get("tab_id"),
+                bool(a.get("save_to_file", True)),
+                int(a.get("quality", 80)),
+            ),
+        ),
+        Tool(
+            "ext_navigate",
+            "Navigate a Chrome tab to a URL, or open a new tab. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "url": {"type": "string"},
+                "tab_id": {"type": "integer"},
+                "new_tab": {"type": "boolean", "default": False},
+            }, ["url"]),
+            lambda c, a: ext_ops.ext_navigate(
+                c,
+                str(a["url"]),
+                a.get("tab_id"),
+                bool(a.get("new_tab", False)),
+            ),
+        ),
+        Tool(
+            "ext_click_element",
+            "Click a DOM element identified by a CSS selector in a Chrome tab. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "selector": {"type": "string"},
+                "tab_id": {"type": "integer"},
+            }, ["selector"]),
+            lambda c, a: ext_ops.ext_click_element(c, str(a["selector"]), a.get("tab_id")),
+        ),
+        Tool(
+            "ext_fill_input",
+            "Fill a form input or textarea with a value (by CSS selector) in a Chrome tab. Optionally submit the form. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "selector": {"type": "string"},
+                "value": {"type": "string"},
+                "tab_id": {"type": "integer"},
+                "submit": {"type": "boolean", "default": False},
+            }, ["selector", "value"]),
+            lambda c, a: ext_ops.ext_fill_input(
+                c,
+                str(a["selector"]),
+                str(a["value"]),
+                a.get("tab_id"),
+                bool(a.get("submit", False)),
+            ),
+        ),
+        Tool(
+            "ext_run_js",
+            "Execute JavaScript in a Chrome tab and return the result. Requires 'Allow JS execution' to be enabled in the extension popup. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "code": {"type": "string"},
+                "tab_id": {"type": "integer"},
+                "max_chars": {"type": "integer", "default": 10000},
+            }, ["code"]),
+            lambda c, a: ext_ops.ext_run_js(
+                c,
+                str(a["code"]),
+                a.get("tab_id"),
+                int(a.get("max_chars", 10000)),
+            ),
+        ),
+        Tool(
+            "ext_listen_changes",
+            "Listen for page navigation and DOM changes in a Chrome tab for up to duration_sec seconds. Returns a list of captured events. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "duration_sec": {"type": "integer", "default": 30},
+                "tab_id": {"type": "integer"},
+            }),
+            lambda c, a: ext_ops.ext_listen_changes(
+                c,
+                int(a.get("duration_sec", 30)),
+                a.get("tab_id"),
+            ),
+        ),
     ]
 
 

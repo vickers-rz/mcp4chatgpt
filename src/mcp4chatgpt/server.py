@@ -18,6 +18,7 @@ from .oauth import (
     verify_token,
 )
 from .tools import ToolRegistry
+from . import ext_bridge
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: Any) -> None:
@@ -233,7 +234,18 @@ def main() -> None:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(config.tls_cert_path, config.tls_key_path)
         server.socket = ctx.wrap_socket(server.socket, server_side=True)
+
+    # Start the Chrome extension WebSocket bridge
+    ext_bridge.start_bridge(
+        auth_secret=config.auth_secret,
+        port=config.ext_bridge_port,
+    )
+    token_hint = ext_bridge._derive_token(config.auth_secret)
     print(f"mcp4chatgpt listening on {config.bind_host}:{config.bind_port}")
+    print(
+        f"ext_bridge  listening on ws://127.0.0.1:{config.ext_bridge_port}  "
+        f"(extension token: {token_hint[:8]}...)"
+    )
     server.serve_forever()
 
 

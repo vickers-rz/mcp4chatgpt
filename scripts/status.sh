@@ -3,9 +3,23 @@ set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PID_FILE="$ROOT/tmp.service.pid"
+LAUNCHD_LABEL="com.vickers.mcp4chatgpt"
+LAUNCHD_SERVICE="gui/$(id -u)/$LAUNCHD_LABEL"
+TMUX_SESSION="mcp4chatgpt"
 
 status="stopped"
 pid=""
+launchd_status="not loaded"
+if [ "$(uname -s)" = "Darwin" ] && command -v launchctl >/dev/null 2>&1; then
+  if launchctl print "$LAUNCHD_SERVICE" >/dev/null 2>&1; then
+    launchd_status="loaded"
+  fi
+fi
+tmux_status="not running"
+if command -v tmux >/dev/null 2>&1 && tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
+  tmux_status="running"
+fi
+
 if [ -f "$PID_FILE" ]; then
   pid="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
@@ -27,6 +41,8 @@ if [ "$status" = "stopped" ]; then
 fi
 
 echo "Status: $status"
+echo "Launchd: $launchd_status"
+echo "Tmux: $tmux_status"
 if [ -n "$pid" ]; then
   echo "PID: $pid"
 fi

@@ -6,12 +6,14 @@ import tempfile
 import threading
 import time
 import unittest
+from base64 import b64encode
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from mcp4chatgpt.audit import AuditLogger
 from mcp4chatgpt.config import Config
-from mcp4chatgpt import knowledge_ops, local_ops, web_ops
+from mcp4chatgpt import ext_ops, knowledge_ops, local_ops, web_ops
 from mcp4chatgpt.oauth import issue_token, register_client, verify_token
 from mcp4chatgpt.safety import resolve_allowed_path, validate_command
 from mcp4chatgpt.tools import ToolRegistry
@@ -39,6 +41,8 @@ def make_config(tmp: Path) -> Config:
         log_rotate_bytes=20 * 1024 * 1024,
         log_retention_days=30,
         allowed_hosts=["localhost", "127.0.0.1", "::1"],
+        ext_bridge_port=8765,
+        ext_screenshot_dir=tmp / "screenshots",
     )
 
 
@@ -197,6 +201,114 @@ class CoreTests(unittest.TestCase):
             config = make_config(Path(d))
             with self.assertRaises(web_ops.WebOpsNotConfigured):
                 web_ops.search(config, "test")
+
+    def test_chrome_tools_are_listed_as_read_only(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            registry = ToolRegistry(make_config(Path(d)), AuditLogger(Path(d) / "audit.jsonl"))
+            tools = {tool["name"]: tool for tool in registry.list_tools()["tools"]}
+            self.assertIn("chrome_list_tabs", tools)
+            self.assertIn("chrome_get_active_tab_context", tools)
+            self.assertIn("browser_current_tab", tools)
+            self.assertIn("browser_get_page_text", tools)
+            self.assertIn("browser_get_selection", tools)
+            self.assertIn("browser_get_links", tools)
+            self.assertTrue(tools["chrome_list_tabs"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["chrome_get_active_tab_context"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["browser_current_tab"]["annotations"]["readOnlyHint"])
+
+    def test_ext_connection_status_disconnected_is_structured(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            with mock.patch("mcp4chatgpt.ext_bridge.connection_info", return_value={"connected": False}):
+                status = ext_ops.ext_connection_status(config)
+            self.assertFalse(status["connected"])
+            self.assertIn("NOT connected", status["hint"])
+
+    def test_ext_list_tabs_requires_connection(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=False):
+                with self.assertRaises(ext_ops.ExtNotConnectedError):
+                    ext_ops.ext_list_tabs(config)
+
+    def test_ext_list_tabs_sends_command_and_redacts(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabs": [{
+                    "windowId": 1,
+                    "tabId": 2,
+                    "index": 0,
+                    "active": True,
+                    "pinned": False,
+                    "title": "Token tab",
+                    "url": "https://example.test/?token=secret-value",
+                    "status": "complete",
+                }],
+                "truncated": False,
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_list_tabs(config, max_tabs=5)
+
+            send.assert_called_once_with("list_tabs", {"maxTabs": 5})
+            self.assertEqual(result["count"], 1)
+            self.assertIn("[REDACTED]", result["tabs"][0]["url"])
+
+    def test_ext_screenshot_saves_png_to_configured_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            png_bytes = b"\x89PNG\r\n\x1a\n"
+            send = mock.Mock(return_value={
+                "tabId": 7,
+                "url": "https://example.test",
+                "dataUrl": "data:image/png;base64," + b64encode(png_bytes).decode("ascii"),
+                "width": 1,
+                "height": 1,
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_screenshot(config, quality=95)
+
+            send.assert_called_once_with("screenshot", {"quality": 95}, timeout=20)
+            saved = Path(result["file_path"])
+            self.assertEqual(saved.read_bytes(), png_bytes)
+            self.assertEqual(saved.parent, config.ext_screenshot_dir)
+            self.assertNotIn("data_base64", result)
+
+    def test_ext_listen_changes_waits_and_unsubscribes(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            callbacks = []
+
+            def subscribe(callback):
+                callbacks.append(callback)
+
+            def send_command(cmd, args, timeout):
+                self.assertEqual(cmd, "subscribe_changes")
+                self.assertEqual(args, {"durationSec": 3, "tabId": 9})
+                self.assertEqual(timeout, 10)
+                callbacks[0]({
+                    "event": "dom_mutation",
+                    "tabId": 9,
+                    "url": "https://example.test",
+                    "title": "Changed",
+                    "timestamp": 123.0,
+                })
+                return {"subscribed": True}
+
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.subscribe_changes", side_effect=subscribe) as sub, \
+                    mock.patch("mcp4chatgpt.ext_bridge.unsubscribe_changes") as unsub, \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", side_effect=send_command), \
+                    mock.patch("mcp4chatgpt.ext_ops.time.sleep") as sleep:
+                result = ext_ops.ext_listen_changes(config, duration_sec=3, tab_id=9)
+
+            self.assertEqual(result["count"], 1)
+            self.assertEqual(result["events"][0]["type"], "dom_mutation")
+            sleep.assert_called_once_with(3)
+            sub.assert_called_once()
+            unsub.assert_called_once_with(callbacks[0])
 
     def test_oauth_token(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -388,6 +500,32 @@ class CoreTests(unittest.TestCase):
             self.assertIn("terminal_get_app_context", names)
             self.assertIn("local_run_command", names)
             self.assertIn("local_command_log_tail", names)
+            # Browser extension tools
+            self.assertIn("ext_connection_status", names)
+            self.assertIn("ext_list_tabs", names)
+            self.assertIn("ext_get_active_tab", names)
+            self.assertIn("ext_get_dom", names)
+            self.assertIn("ext_get_selection", names)
+            self.assertIn("ext_screenshot", names)
+            self.assertIn("ext_navigate", names)
+            self.assertIn("ext_click_element", names)
+            self.assertIn("ext_fill_input", names)
+            self.assertIn("ext_run_js", names)
+            self.assertIn("ext_listen_changes", names)
+
+    def test_ext_tool_annotations_match_read_and_write_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            registry = ToolRegistry(config, AuditLogger(config.audit_log))
+            tools = {tool["name"]: tool for tool in registry.list_tools()["tools"]}
+
+            self.assertTrue(tools["ext_get_active_tab"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["ext_screenshot"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["ext_listen_changes"]["annotations"]["readOnlyHint"])
+            self.assertFalse(tools["ext_navigate"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["ext_navigate"]["annotations"]["destructiveHint"])
+            self.assertFalse(tools["ext_run_js"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["ext_run_js"]["annotations"]["destructiveHint"])
 
     def test_command_and_terminal_tool_descriptions_are_explicit(self) -> None:
         with tempfile.TemporaryDirectory() as d:
