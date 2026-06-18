@@ -201,6 +201,9 @@ Important variables:
 
 - `MCP_PUBLIC_BASE_URL`: public origin, expected to be `https://mcp.runzhe.uk`.
 - `MCP_BIND_HOST` / `MCP_BIND_PORT`: local listener, default `127.0.0.1:8766`.
+- `MCP_ALLOWED_HOSTS`: optional comma-separated additions to the HTTP `Host`
+  header allowlist. Defaults already include `localhost`, `127.0.0.1`, `::1`,
+  `MCP_BIND_HOST`, and the hostname from `MCP_PUBLIC_BASE_URL`.
 - `MCP_AUTH_SECRET`: local approval secret and token signing key.
 - `MCP_ALLOWED_ROOTS`: roots allowed for file, command, Git, and patch tools.
 - `MCP_CO_TE_PATH`: path to the reusable macOS terminal backend. If unset, the
@@ -250,6 +253,8 @@ Operational impact:
 Security impact:
 
 - If reverse-proxied publicly, OAuth and HTTPS become mandatory.
+- Unknown `Host` headers are rejected before route handling; keep
+  `MCP_ALLOWED_HOSTS` limited to trusted public/reverse-proxy names.
 - `MCP_ALLOWED_ROOTS` should remain narrow.
 - Firecrawl keys and OAuth client data live under the configured project data directory.
 - Terminal tools may trigger macOS Automation/Accessibility prompts and should not be enabled casually as an always-on service.

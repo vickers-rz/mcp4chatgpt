@@ -64,7 +64,31 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     content_type = handler.headers.get("Content-Type", "")
     if "application/x-www-form-urlencoded" in content_type:
         return {k: v[-1] for k, v in parse_qs(raw).items()}
-    return json.loads(raw or "{}")
+    data = json.loads(raw or "{}")
+    if not isinstance(data, dict):
+        raise ValueError("JSON body must be an object.")
+    return data
+
+
+def _host_without_port(host: str) -> str:
+    host = host.strip().lower()
+    if not host:
+        return ""
+    if host.startswith("["):
+        end = host.find("]")
+        return host[1:end] if end != -1 else host.strip("[]")
+    if host.count(":") == 1:
+        return host.split(":", 1)[0]
+    return host
+
+
+def _host_allowed(handler: BaseHTTPRequestHandler, config: Config) -> bool:
+    host = _host_without_port(handler.headers.get("Host", ""))
+    return host in {_host_without_port(item) for item in config.allowed_hosts}
+
+
+def _forbidden_host(handler: BaseHTTPRequestHandler) -> None:
+    _json_response(handler, 403, {"error": "forbidden_host"})
 
 
 def _make_error(code: int, message: str, request_id: Any = None) -> dict[str, Any]:
@@ -87,6 +111,9 @@ class Handler(BaseHTTPRequestHandler):
         self.server.registry.audit.log("http", remote=self.client_address[0], message=fmt % args)
 
     def do_GET(self) -> None:
+        if not _host_allowed(self, self.server.config):
+            _forbidden_host(self)
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/health":
             _json_response(self, 200, {"ok": True})
@@ -104,6 +131,9 @@ class Handler(BaseHTTPRequestHandler):
         _json_response(self, 404, {"error": "not_found"})
 
     def do_POST(self) -> None:
+        if not _host_allowed(self, self.server.config):
+            _forbidden_host(self)
+            return
         parsed = urlparse(self.path)
         try:
             if parsed.path == "/oauth/register":
@@ -145,12 +175,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:
             _auth_required(self, self.server.config, str(exc))
             return
-        request = _read_json(self)
-        method = request.get("method")
-        request_id = request.get("id")
-        params = request.get("params") or {}
-        self.server.registry.audit.log("mcp_request", client_id=client_id, method=method)
+        request_id = None
         try:
+            request = _read_json(self)
+            method = request.get("method")
+            request_id = request.get("id")
+            params = request.get("params") or {}
+            self.server.registry.audit.log("mcp_request", client_id=client_id, method=method)
             if method == "initialize":
                 # Minimal MCP handshake. Tool capability discovery happens via
                 # tools/list so the server can keep protocol state stateless.

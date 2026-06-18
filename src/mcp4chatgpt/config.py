@@ -4,6 +4,7 @@ import os
 import secrets
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def _load_dotenv(path: Path) -> None:
@@ -28,6 +29,20 @@ def _split_paths(value: str) -> list[Path]:
     return paths
 
 
+def _split_hosts(value: str) -> list[str]:
+    hosts: list[str] = []
+    for part in value.split(","):
+        part = part.strip()
+        if part:
+            hosts.append(part.lower())
+    return hosts
+
+
+def _host_from_url(value: str) -> str:
+    parsed = urlparse(value)
+    return (parsed.hostname or "").lower()
+
+
 @dataclass(frozen=True)
 class Config:
     public_base_url: str
@@ -47,6 +62,7 @@ class Config:
     max_output_chars: int
     log_rotate_bytes: int
     log_retention_days: int
+    allowed_hosts: list[str]
 
     @property
     def mcp_url(self) -> str:
@@ -68,9 +84,23 @@ def load_config() -> Config:
         secret = secrets.token_urlsafe(32)
     default_co_te_path = project_root.parent / "codex_work_with_apps" / "co-te.py"
 
+    public_base_url = os.environ.get("MCP_PUBLIC_BASE_URL", "http://127.0.0.1:8766").rstrip("/")
+    bind_host = os.environ.get("MCP_BIND_HOST", "127.0.0.1")
+    default_hosts = {
+        "localhost",
+        "127.0.0.1",
+        "::1",
+        bind_host.lower(),
+        _host_from_url(public_base_url),
+    }
+    allowed_hosts = sorted(host for host in default_hosts if host)
+    for host in _split_hosts(os.environ.get("MCP_ALLOWED_HOSTS", "")):
+        if host not in allowed_hosts:
+            allowed_hosts.append(host)
+
     return Config(
-        public_base_url=os.environ.get("MCP_PUBLIC_BASE_URL", "http://127.0.0.1:8766").rstrip("/"),
-        bind_host=os.environ.get("MCP_BIND_HOST", "127.0.0.1"),
+        public_base_url=public_base_url,
+        bind_host=bind_host,
         bind_port=int(os.environ.get("MCP_BIND_PORT", "8766")),
         auth_secret=secret,
         allowed_roots=_split_paths(os.environ.get("MCP_ALLOWED_ROOTS", str(Path.home() / "Documents"))),
@@ -86,4 +116,5 @@ def load_config() -> Config:
         max_output_chars=int(os.environ.get("MCP_MAX_OUTPUT_CHARS", "50000")),
         log_rotate_bytes=int(os.environ.get("MCP_LOG_ROTATE_BYTES", str(20 * 1024 * 1024))),
         log_retention_days=int(os.environ.get("MCP_LOG_RETENTION_DAYS", "30")),
+        allowed_hosts=allowed_hosts,
     )

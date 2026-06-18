@@ -72,6 +72,7 @@ docs/05  →  架构说明：当前架构的权威参考文档
 | Bug 5 | `.env.example` | 🟡 | ✅ 已修复 | 模板文件中包含大量硬编码个人电脑路径。现已改为泛化的 `yourname` 占位符及空白路径搭配注释。 |
 | Bug 6 | `oauth.py` | 🟡 | ✅ 已修复 | `render_authorize_form` 生成授权表单时，`name` 属性未作转义，存在 XSS 风险。现已通过新增全局 HTML 转义工具函数以及属性白名单限制规避 XSS 风险。 |
 | Bug 7 | `knowledge_ops.py` / `oauth.py` | 🟡 | ✅ 已修复 | 损坏或结构异常的 JSON store 之前会被静默当作空数据，后续保存可能覆盖原文件。现已在加载失败时重命名为 `.corrupt.<timestamp>` 备份后再返回空结构。 |
+| Bug 8 | `oauth.py` / `server.py` / `local_ops.py` | 🟠 | ✅ 已修复 | OAuth 授权码消费缺少锁保护、动态注册未校验 `redirect_uris` 类型、JSON body 允许非 object、HTTP 未限制 Host header、命令日志 tail 会一次性读入大文件。现已增加授权码锁、输入类型校验、非 object JSON 拒绝、Host allowlist，以及流式 tail 读取。 |
 
 ### 单元测试与稳定性
 

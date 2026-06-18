@@ -172,6 +172,6 @@ login background item unless you explicitly install and modify it.
 
 ## Safety Notes
 
-This is a full local-ops server. It can read/write allowed files and run allowed commands. Keep it behind OAuth and HTTPS. Set `MCP_ALLOWED_ROOTS` narrowly.
+This is a full local-ops server. It can read/write allowed files and run allowed commands. Keep it behind OAuth and HTTPS. Set `MCP_ALLOWED_ROOTS` narrowly. The HTTP server rejects unknown `Host` headers by default; use `MCP_ALLOWED_HOSTS` only for additional trusted reverse-proxy hostnames.
 
 Terminal tools reuse `/Users/vickers/Documents/MCP_Creator/codex_work_with_apps/co-te.py`; macOS Automation and Accessibility permissions still apply to the process running this server.

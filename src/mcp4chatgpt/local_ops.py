@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -73,9 +74,12 @@ def tail_command_log(config: Config, limit: int = 20) -> dict[str, Any]:
     limit = max(1, min(limit, 200))
     if not path.exists():
         return {"path": str(path), "order": "oldest_to_newest", "entries": []}
-    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines: deque[str] = deque(maxlen=limit)
+    with path.open(encoding="utf-8", errors="replace") as fh:
+        for line in fh:
+            lines.append(line.rstrip("\n"))
     entries = []
-    for line in lines[-limit:]:
+    for line in lines:
         try:
             entry = json.loads(line)
         except json.JSONDecodeError:

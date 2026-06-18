@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import subprocess
 import tempfile
+import threading
 import time
 import unittest
 from dataclasses import replace
@@ -37,6 +38,7 @@ def make_config(tmp: Path) -> Config:
         max_output_chars=10000,
         log_rotate_bytes=20 * 1024 * 1024,
         log_retention_days=30,
+        allowed_hosts=["localhost", "127.0.0.1", "::1"],
     )
 
 
@@ -130,6 +132,24 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(len(tailed["entries"]), 1)
             self.assertEqual(tailed["entries"][0]["stdout"], "second")
 
+    def test_local_command_log_tail_skips_malformed_lines(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            command_log = config.audit_log.parent / "commands.jsonl"
+            command_log.parent.mkdir(parents=True)
+            command_log.write_text(
+                "\n".join([
+                    json.dumps({"stdout": "first"}),
+                    "not json",
+                    json.dumps({"stdout": "second"}),
+                    json.dumps({"stdout": "third"}),
+                ]),
+                encoding="utf-8",
+            )
+
+            tailed = local_ops.tail_command_log(config, limit=2)
+            self.assertEqual([entry["stdout"] for entry in tailed["entries"]], ["second", "third"])
+
     def test_knowledge_add_search_fetch(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -192,6 +212,46 @@ class CoreTests(unittest.TestCase):
             }
             token = issue_token(config, {"code": code, "client_id": client["client_id"]})["access_token"]
             self.assertEqual(verify_token(config, token), client["client_id"])
+
+    def test_oauth_register_rejects_invalid_redirect_uris(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            with self.assertRaises(ValueError):
+                register_client(config, {"redirect_uris": "https://bad.example/cb"})
+            with self.assertRaises(ValueError):
+                register_client(config, {"redirect_uris": [1]})
+            client = register_client(config, {"redirect_uris": ["https://chat.openai.com/aip/callback"]})
+            self.assertEqual(client["redirect_uris"], ["https://chat.openai.com/aip/callback"])
+
+    def test_oauth_code_is_single_use_under_concurrency(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            from mcp4chatgpt import oauth
+
+            code = "concurrent-code"
+            client_id = "client-test"
+            oauth.AUTH_CODES[code] = {
+                "client_id": client_id,
+                "redirect_uri": "https://chat.openai.com/aip/callback",
+                "created_at": time.time(),
+            }
+            successes = []
+            failures = []
+
+            def consume() -> None:
+                try:
+                    successes.append(issue_token(config, {"code": code, "client_id": client_id}))
+                except ValueError as exc:
+                    failures.append(str(exc))
+
+            threads = [threading.Thread(target=consume) for _ in range(8)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+
+            self.assertEqual(len(successes), 1)
+            self.assertEqual(len(failures), 7)
 
     def test_corrupt_oauth_clients_are_quarantined_before_reuse(self) -> None:
         with tempfile.TemporaryDirectory() as d:

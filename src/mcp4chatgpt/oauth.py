@@ -5,6 +5,7 @@ import hashlib
 import hmac
 import json
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -64,13 +65,15 @@ def _save_clients(config: Config, clients: dict[str, Any]) -> None:
 AUTH_CODE_TTL_SECONDS = 600
 MAX_AUTH_CODES = 1024
 AUTH_CODES: dict[str, dict[str, Any]] = {}
+AUTH_CODES_LOCK = threading.RLock()
 
 
 def _cleanup_expired_codes(now: float | None = None) -> None:
-    now = now or time.time()
-    expired = [code for code, record in AUTH_CODES.items() if now - float(record.get("created_at", 0)) > AUTH_CODE_TTL_SECONDS]
-    for code in expired:
-        AUTH_CODES.pop(code, None)
+    with AUTH_CODES_LOCK:
+        now = now or time.time()
+        expired = [code for code, record in AUTH_CODES.items() if now - float(record.get("created_at", 0)) > AUTH_CODE_TTL_SECONDS]
+        for code in expired:
+            AUTH_CODES.pop(code, None)
 
 
 def issuer(config: Config) -> str:
@@ -103,6 +106,9 @@ def protected_resource_metadata(config: Config) -> dict[str, Any]:
 def register_client(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
     # Dynamic registration keeps ChatGPT setup friction low. Registered clients
     # are persisted, while short-lived authorization codes remain in memory.
+    redirect_uris = payload.get("redirect_uris", [])
+    if not isinstance(redirect_uris, list) or not all(isinstance(uri, str) for uri in redirect_uris):
+        raise ValueError("redirect_uris must be a list of strings.")
     client_id = "client_" + secrets.token_urlsafe(18)
     client_secret = secrets.token_urlsafe(32)
     clients = _load_clients(config)
@@ -110,7 +116,7 @@ def register_client(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
         "client_id": client_id,
         "client_secret": client_secret,
         "client_name": payload.get("client_name", "ChatGPT"),
-        "redirect_uris": payload.get("redirect_uris", []),
+        "redirect_uris": redirect_uris,
         "created_at": time.time(),
     }
     _save_clients(config, clients)
@@ -178,17 +184,18 @@ def create_auth_redirect(config: Config, params: dict[str, str], admin_secret: s
         raise ValueError("Unknown OAuth client.")
     if client.get("redirect_uris") and redirect_uri not in client["redirect_uris"]:
         raise ValueError("redirect_uri is not registered for this client.")
-    _cleanup_expired_codes()
-    if len(AUTH_CODES) >= MAX_AUTH_CODES:
-        raise ValueError("Too many pending authorization codes; retry later.")
-    code = secrets.token_urlsafe(32)
-    AUTH_CODES[code] = {
-        "client_id": client_id,
-        "redirect_uri": redirect_uri,
-        "code_challenge": params.get("code_challenge"),
-        "code_challenge_method": params.get("code_challenge_method", "plain"),
-        "created_at": time.time(),
-    }
+    with AUTH_CODES_LOCK:
+        _cleanup_expired_codes()
+        if len(AUTH_CODES) >= MAX_AUTH_CODES:
+            raise ValueError("Too many pending authorization codes; retry later.")
+        code = secrets.token_urlsafe(32)
+        AUTH_CODES[code] = {
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "code_challenge": params.get("code_challenge"),
+            "code_challenge_method": params.get("code_challenge_method", "plain"),
+            "created_at": time.time(),
+        }
     query = {"code": code}
     if params.get("state"):
         query["state"] = params["state"]
@@ -200,14 +207,15 @@ def issue_token(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
     client_id = payload.get("client_id", "")
     # Use get() first so we can distinguish "unknown code" from "expired code"
     # before removing the entry.  _cleanup runs after to purge other stale codes.
-    record = AUTH_CODES.get(code)
-    if not record or record["client_id"] != client_id:
-        raise ValueError("Invalid authorization code.")
-    if time.time() - float(record.get("created_at", 0)) > AUTH_CODE_TTL_SECONDS:
-        AUTH_CODES.pop(code, None)
-        raise ValueError("Authorization code has expired.")
-    AUTH_CODES.pop(code, None)  # consume — single use
-    _cleanup_expired_codes()    # opportunistic cleanup of other stale codes
+    with AUTH_CODES_LOCK:
+        record = AUTH_CODES.get(code)
+        if not record or record["client_id"] != client_id:
+            raise ValueError("Invalid authorization code.")
+        if time.time() - float(record.get("created_at", 0)) > AUTH_CODE_TTL_SECONDS:
+            AUTH_CODES.pop(code, None)
+            raise ValueError("Authorization code has expired.")
+        AUTH_CODES.pop(code, None)  # consume — single use
+        _cleanup_expired_codes()    # opportunistic cleanup of other stale codes
     verifier = payload.get("code_verifier")
     challenge = record.get("code_challenge")
     if challenge:
