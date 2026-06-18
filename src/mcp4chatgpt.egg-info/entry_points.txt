@@ -1,2 +1,0 @@
-[console_scripts]
-mcp4chatgpt = mcp4chatgpt.server:main

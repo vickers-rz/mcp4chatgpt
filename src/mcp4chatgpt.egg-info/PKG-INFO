@@ -1,7 +1,0 @@
-Metadata-Version: 2.4
-Name: mcp4chatgpt
-Version: 0.1.0
-Summary: ChatGPT Web MCP server for local ops, web ops, and source-grounded knowledge workflows.
-Requires-Python: >=3.11
-Provides-Extra: dev
-Requires-Dist: pytest>=9.1.0; extra == "dev"
