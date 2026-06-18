@@ -5,6 +5,11 @@ description = "ChatGPT Web MCP server for local ops, web ops, and source-grounde
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.1.0",
+]
+
 [project.scripts]
 mcp4chatgpt = "mcp4chatgpt.server:main"
 
