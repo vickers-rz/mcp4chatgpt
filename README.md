@@ -61,6 +61,8 @@ Useful controller commands:
 ./MCP4ChatGPT.command check
 ./MCP4ChatGPT.command tail
 ./MCP4ChatGPT.command rotate-logs
+./MCP4ChatGPT.command cleanup
+./MCP4ChatGPT.command clean-restart
 ```
 
 ## Logs And Rotation
@@ -91,6 +93,35 @@ The controller runs `scripts/rotate_logs.sh` during `start`, `status`, and
 
 Archive retention is controlled by `MCP_LOG_RETENTION_DAYS` (default: 30).
 
+## Codex/co-te Helper Cleanup
+
+Codex and local app-control bridges can leave lightweight helper processes such
+as `co-te.py` or `cua_node/bin/node_repl`. Audit them without killing anything:
+
+```bash
+./MCP4ChatGPT.command cleanup
+```
+
+The underlying script is intentionally dry-run by default. To terminate only
+eligible candidates older than the age threshold:
+
+```bash
+scripts/cleanup_codex_co_te.sh --kill --min-age-sec 1800
+```
+
+It only targets the known `co-te.py` and Codex `node_repl` helper paths, and it
+skips helpers descended from the current MCP service.
+
+For a full one-command refresh, stop this MCP service, clear all known
+Codex/co-te helpers, and start the MCP service again:
+
+```bash
+./MCP4ChatGPT.command clean-restart
+```
+
+`restart-clean` is accepted as an alias. This is intentionally separate from
+plain `restart`, which only restarts the MCP service and Cloudflare Tunnel.
+
 ## ChatGPT Connector
 
 Use OAuth authentication.
@@ -108,6 +139,19 @@ MCP endpoint:
 - `/mcp`
 
 During OAuth authorization, enter `MCP_AUTH_SECRET` on the local approval form.
+
+## Open WebUI
+
+Open WebUI can use the same public MCP endpoint through its native MCP external
+tool support:
+
+- Type: `MCP (Streamable HTTP)`
+- URL: `https://mcp.runzhe.uk/mcp`
+- Auth: `OAuth 2.1`
+
+Do not add this endpoint as an OpenAPI tool server. The `/mcp` route speaks
+JSON-RPC MCP over Streamable HTTP; OpenAPI compatibility would require a
+separate `mcpo` proxy.
 
 ## Tool Groups
 

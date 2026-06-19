@@ -9,12 +9,13 @@ LAUNCHD_LABEL="com.vickers.mcp4chatgpt"
 LAUNCHD_PLIST="$ROOT/deploy/$LAUNCHD_LABEL.plist"
 LAUNCHD_SERVICE="gui/$(id -u)/$LAUNCHD_LABEL"
 TMUX_SESSION="mcp4chatgpt"
+SERVICE_PATTERN="[m]cp4chatgpt.server"
 
 mkdir -p "$ROOT/logs" "$ROOT/data"
 
 if command -v tmux >/dev/null 2>&1 && [ "${MCP_USE_LAUNCHD:-0}" != "1" ]; then
   if tmux has-session -t "$TMUX_SESSION" 2>/dev/null; then
-    detected_pid="$(pgrep -f "mcp4chatgpt.server" | head -n 1 || true)"
+    detected_pid="$(pgrep -f "$SERVICE_PATTERN" | head -n 1 || true)"
     if [ -n "$detected_pid" ]; then
       echo "$detected_pid" > "$PID_FILE"
       echo "MCP4ChatGPT is already running in tmux: pid=$detected_pid"
@@ -34,7 +35,7 @@ if command -v tmux >/dev/null 2>&1 && [ "${MCP_USE_LAUNCHD:-0}" != "1" ]; then
   done
 
   if [ "$ok" = "1" ]; then
-    detected_pid="$(pgrep -f "mcp4chatgpt.server" | head -n 1 || true)"
+    detected_pid="$(pgrep -f "$SERVICE_PATTERN" | head -n 1 || true)"
     if [ -n "$detected_pid" ]; then
       echo "$detected_pid" > "$PID_FILE"
       echo "MCP4ChatGPT started in tmux: pid=$detected_pid"
@@ -70,7 +71,7 @@ if [ "${MCP_USE_LAUNCHD:-0}" = "1" ] && [ "$(uname -s)" = "Darwin" ] && command 
   done
 
   if [ "$ok" = "1" ]; then
-    detected_pid="$(pgrep -f "mcp4chatgpt.server" | head -n 1 || true)"
+    detected_pid="$(pgrep -f "$SERVICE_PATTERN" | head -n 1 || true)"
     if [ -n "$detected_pid" ]; then
       echo "$detected_pid" > "$PID_FILE"
       echo "MCP4ChatGPT started with launchd: pid=$detected_pid"

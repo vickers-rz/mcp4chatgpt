@@ -6,6 +6,8 @@ PID_FILE="$ROOT/tmp.service.pid"
 LAUNCHD_LABEL="com.vickers.mcp4chatgpt"
 LAUNCHD_SERVICE="gui/$(id -u)/$LAUNCHD_LABEL"
 TMUX_SESSION="mcp4chatgpt"
+SERVICE_PATTERN="[m]cp4chatgpt.server"
+TUNNEL_PATTERN="[c]loudflared tunnel --config .*cloudflared-mcp4chatgpt.yml run mcp4chatgpt"
 
 status="stopped"
 pid=""
@@ -33,7 +35,7 @@ fi
 # Foreground starts from Codex/Terminal do not create tmp.service.pid. Fall
 # back to process detection so status reflects the actual runtime state.
 if [ "$status" = "stopped" ]; then
-  detected_pid="$(pgrep -f "mcp4chatgpt.server" | head -n 1 || true)"
+  detected_pid="$(pgrep -f "$SERVICE_PATTERN" | head -n 1 || true)"
   if [ -n "$detected_pid" ]; then
     status="running"
     pid="$detected_pid"
@@ -74,7 +76,7 @@ if [ -f "$ROOT/tmp.cloudflared.pid" ]; then
     echo "Cloudflare Tunnel: stopped"
   fi
 else
-  tunnel_pid="$(pgrep -f "cloudflared tunnel --config .*cloudflared-mcp4chatgpt.yml run mcp4chatgpt" | head -n 1 || true)"
+  tunnel_pid="$(pgrep -f "$TUNNEL_PATTERN" | head -n 1 || true)"
   if [ -n "$tunnel_pid" ]; then
     echo "Cloudflare Tunnel: running pid=$tunnel_pid"
   else

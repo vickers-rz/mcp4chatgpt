@@ -44,6 +44,27 @@ def post_raw_json(url: str, payload: object, token: str | None = None, host: str
             exc.close()
 
 
+def post_raw_response(
+    url: str,
+    payload: object,
+    token: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int, bytes, dict[str, str]]:
+    data = json.dumps(payload).encode("utf-8")
+    headers = {"Content-Type": "application/json", **(extra_headers or {})}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read(), dict(resp.headers.items())
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, exc.read(), dict(exc.headers.items())
+        finally:
+            exc.close()
+
+
 def get_json(url: str, host: str | None = None) -> tuple[int, dict]:
     headers = {}
     if host:
@@ -59,7 +80,34 @@ def get_json(url: str, host: str | None = None) -> tuple[int, dict]:
             exc.close()
 
 
+def get_raw_response(
+    url: str,
+    token: str | None = None,
+    extra_headers: dict[str, str] | None = None,
+) -> tuple[int, bytes, dict[str, str]]:
+    headers = dict(extra_headers or {})
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return resp.status, resp.read(), dict(resp.headers.items())
+    except urllib.error.HTTPError as exc:
+        try:
+            return exc.code, exc.read(), dict(exc.headers.items())
+        finally:
+            exc.close()
+
+
 class ServerTests(unittest.TestCase):
+    def issue_test_token(self, config) -> str:
+        from mcp4chatgpt import oauth
+
+        client_id = "client-test"
+        code = f"server-code-{time.time_ns()}"
+        oauth.AUTH_CODES[code] = {"client_id": client_id, "redirect_uri": "https://example.test/cb", "created_at": time.time()}
+        return issue_token(config, {"code": code, "client_id": client_id})["access_token"]
+
     def test_mcp_initialize_and_tools_list(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -68,12 +116,7 @@ class ServerTests(unittest.TestCase):
             thread.start()
             host, port = server.server_address
             try:
-                from mcp4chatgpt import oauth
-
-                client_id = "client-test"
-                code = "server-code"
-                oauth.AUTH_CODES[code] = {"client_id": client_id, "redirect_uri": "https://example.test/cb", "created_at": time.time()}
-                token = issue_token(config, {"code": code, "client_id": client_id})["access_token"]
+                token = self.issue_test_token(config)
                 base = f"http://{host}:{port}"
                 init = post_json(base + "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, token)
                 self.assertEqual(init["result"]["serverInfo"]["name"], "mcp4chatgpt")
@@ -81,6 +124,72 @@ class ServerTests(unittest.TestCase):
                 names = {tool["name"] for tool in tools["result"]["tools"]}
                 self.assertIn("knowledge_search", names)
                 self.assertIn("web_scrape", names)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_mcp_streamable_http_headers_and_notification_semantics(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                token = self.issue_test_token(config)
+                base = f"http://{host}:{port}"
+                status, body, headers = post_raw_response(
+                    base + "/mcp",
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "initialize",
+                        "params": {"protocolVersion": "2025-11-25"},
+                    },
+                    token=token,
+                    extra_headers={
+                        "Accept": "application/json, text/event-stream",
+                        "MCP-Protocol-Version": "2025-11-25",
+                    },
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+                self.assertEqual(headers["MCP-Protocol-Version"], "2025-11-25")
+                payload = json.loads(body.decode("utf-8"))
+                self.assertEqual(payload["result"]["protocolVersion"], "2025-11-25")
+
+                status, body, headers = post_raw_response(
+                    base + "/mcp",
+                    {"jsonrpc": "2.0", "method": "notifications/initialized"},
+                    token=token,
+                    extra_headers={"MCP-Protocol-Version": "2025-11-25"},
+                )
+                self.assertEqual(status, 202)
+                self.assertEqual(body, b"")
+                self.assertEqual(headers["Content-Length"], "0")
+                self.assertEqual(headers["MCP-Protocol-Version"], "2025-11-25")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_mcp_get_endpoint_declines_sse_stream_with_405(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                token = self.issue_test_token(config)
+                status, body, headers = get_raw_response(
+                    f"http://{host}:{port}/mcp",
+                    token=token,
+                    extra_headers={"Accept": "text/event-stream", "MCP-Protocol-Version": "2025-11-25"},
+                )
+                self.assertEqual(status, 405)
+                self.assertEqual(body, b"")
+                self.assertEqual(headers["Allow"], "POST")
+                self.assertEqual(headers["MCP-Protocol-Version"], "2025-11-25")
             finally:
                 server.shutdown()
                 server.server_close()

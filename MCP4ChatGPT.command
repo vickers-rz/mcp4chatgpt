@@ -7,7 +7,8 @@ PUBLIC_HEALTH="https://mcp.runzhe.uk/health"
 CONNECTOR_URL="https://mcp.runzhe.uk/mcp"
 SERVICE_PID_FILE="$ROOT/tmp.service.pid"
 TUNNEL_PID_FILE="$ROOT/tmp.cloudflared.pid"
-TUNNEL_PATTERN="cloudflared tunnel --config .*cloudflared-mcp4chatgpt.yml run mcp4chatgpt"
+SERVICE_PATTERN="[m]cp4chatgpt.server"
+TUNNEL_PATTERN="[c]loudflared tunnel --config .*cloudflared-mcp4chatgpt.yml run mcp4chatgpt"
 
 usage() {
   cat <<EOF
@@ -17,11 +18,14 @@ Usage:
   ./MCP4ChatGPT.command start       Start MCP service and Cloudflare Tunnel
   ./MCP4ChatGPT.command stop        Stop MCP service and Cloudflare Tunnel
   ./MCP4ChatGPT.command restart     Stop then start both
+  ./MCP4ChatGPT.command clean-restart
+                                    Stop, clean Codex/co-te helpers, then start
   ./MCP4ChatGPT.command status      Show process and health status
   ./MCP4ChatGPT.command check       Run public/local health checks
   ./MCP4ChatGPT.command logs        Open log directory in Finder
   ./MCP4ChatGPT.command tail        Tail service/tunnel/audit logs
   ./MCP4ChatGPT.command rotate-logs Rotate/compress old logs
+  ./MCP4ChatGPT.command cleanup     Audit Codex/co-te helper process residue
   ./MCP4ChatGPT.command url         Print ChatGPT Connector URL
 
 Double-clicking this .command file opens an interactive menu.
@@ -43,7 +47,7 @@ service_pid() {
   fi
 
   # Foreground starts from Terminal/Codex do not write tmp.service.pid.
-  pgrep -f "mcp4chatgpt.server" | head -n 1 || true
+  pgrep -f "$SERVICE_PATTERN" | head -n 1 || true
 }
 
 tunnel_pid() {
@@ -214,6 +218,25 @@ tail_logs() {
     "$ROOT/logs/audit.jsonl"
 }
 
+cleanup_helpers() {
+  "$ROOT/scripts/cleanup_codex_co_te.sh" --dry-run
+}
+
+clean_restart_all() {
+  echo "Stopping MCP service and Cloudflare Tunnel..."
+  stop_all
+  echo
+  echo "Cleaning known Codex/co-te helper residue..."
+  "$ROOT/scripts/cleanup_codex_co_te.sh" --kill --min-age-sec 0
+  sleep 2
+  echo
+  echo "Remaining helper audit:"
+  "$ROOT/scripts/cleanup_codex_co_te.sh" --dry-run
+  echo
+  echo "Starting MCP service and Cloudflare Tunnel..."
+  start_all
+}
+
 interactive_menu() {
   while true; do
     clear
@@ -228,7 +251,9 @@ Choose an action:
   5) Tail logs
   6) Open logs folder
   7) Rotate/compress old logs
-  8) Print Connector URL
+  8) Audit Codex/co-te helpers
+  9) Clean-restart MCP and helpers
+  10) Print Connector URL
   q) Quit
 EOF
     printf "> "
@@ -241,7 +266,9 @@ EOF
       5) tail_logs ;;
       6) open_logs ;;
       7) rotate_logs ;;
-      8) echo "$CONNECTOR_URL" ;;
+      8) cleanup_helpers ;;
+      9) clean_restart_all ;;
+      10) echo "$CONNECTOR_URL" ;;
       q|Q) exit 0 ;;
       *) echo "Unknown choice: $choice" ;;
     esac
@@ -256,11 +283,13 @@ case "$cmd" in
   start) start_all ;;
   stop) stop_all ;;
   restart) restart_all ;;
+  clean-restart|restart-clean) clean_restart_all ;;
   status) status ;;
   check) check_all ;;
   logs) open_logs ;;
   tail) tail_logs ;;
   rotate-logs) rotate_logs ;;
+  cleanup) cleanup_helpers ;;
   url) echo "$CONNECTOR_URL" ;;
   menu) interactive_menu ;;
   -h|--help|help) usage ;;

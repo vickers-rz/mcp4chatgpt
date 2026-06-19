@@ -64,6 +64,9 @@ reasoning layer, and answer composer.
 - `POST /oauth/authorize`: validates `MCP_AUTH_SECRET` and redirects back with an authorization code.
 - `POST /oauth/token`: exchanges authorization code for a signed bearer token.
 - `POST /mcp`: JSON-RPC endpoint for MCP methods.
+- `GET /mcp`: authenticated Streamable HTTP probe endpoint. Returns `405
+  Method Not Allowed` with `Allow: POST` because this server does not expose a
+  server-to-client SSE stream.
 
 Supported MCP methods:
 
@@ -71,6 +74,8 @@ Supported MCP methods:
 - `notifications/initialized`
 - `tools/list`
 - `tools/call`
+- `resources/list`
+- `prompts/list`
 
 ## Tool Registry
 
@@ -265,4 +270,7 @@ Security impact:
 - No custom crawler/browser infrastructure.
 - No Git write operations.
 - Knowledge retrieval is lexical, not embedding-based.
-- The HTTP MCP transport is a minimal JSON-RPC implementation, not a full SDK-generated transport.
+- The HTTP MCP transport is a lightweight Streamable HTTP-compatible JSON-RPC
+  implementation, not a full SDK-generated transport. It returns JSON responses
+  for request POSTs, `202` with an empty body for notifications, and declines
+  standalone SSE streams with `405`.

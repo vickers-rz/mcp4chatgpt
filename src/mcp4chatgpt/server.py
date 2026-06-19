@@ -30,6 +30,30 @@ def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: Any) -
     handler.wfile.write(body)
 
 
+def _empty_response(handler: BaseHTTPRequestHandler, status: int, extra_headers: dict[str, str] | None = None) -> None:
+    handler.send_response(status)
+    for key, value in (extra_headers or {}).items():
+        handler.send_header(key, value)
+    handler.send_header("Content-Length", "0")
+    handler.end_headers()
+
+
+def _mcp_json_response(
+    handler: BaseHTTPRequestHandler,
+    status: int,
+    payload: Any,
+    protocol_version: str | None = None,
+) -> None:
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    handler.send_response(status)
+    handler.send_header("Content-Type", "application/json; charset=utf-8")
+    if protocol_version:
+        handler.send_header("MCP-Protocol-Version", protocol_version)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
 def _html_response(handler: BaseHTTPRequestHandler, status: int, body: bytes) -> None:
     handler.send_response(status)
     handler.send_header("Content-Type", "text/html; charset=utf-8")
@@ -100,6 +124,23 @@ def _make_result(result: Any, request_id: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
+_SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-03-26", "2024-11-05")
+
+
+def _requested_protocol_version(handler: BaseHTTPRequestHandler) -> str:
+    version = handler.headers.get("MCP-Protocol-Version", "").strip()
+    return version or "2025-03-26"
+
+
+def _negotiate_protocol_version(handler: BaseHTTPRequestHandler, params: dict[str, Any]) -> str:
+    requested = str(params.get("protocolVersion") or _requested_protocol_version(handler))
+    if requested in _SUPPORTED_PROTOCOL_VERSIONS:
+        return requested
+    # Older clients may omit the field or send a future version before falling
+    # back. Prefer the newest version this minimal transport advertises.
+    return _SUPPORTED_PROTOCOL_VERSIONS[0]
+
+
 class MCPServer(ThreadingHTTPServer):
     config: Config
     registry: ToolRegistry
@@ -128,6 +169,21 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/oauth/authorize":
             params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
             _html_response(self, 200, render_authorize_form(params))
+            return
+        if parsed.path == "/mcp":
+            try:
+                self._client_id()
+            except Exception as exc:
+                _auth_required(self, self.server.config, str(exc))
+                return
+            _empty_response(
+                self,
+                405,
+                {
+                    "Allow": "POST",
+                    "MCP-Protocol-Version": _requested_protocol_version(self),
+                },
+            )
             return
         _json_response(self, 404, {"error": "not_found"})
 
@@ -171,6 +227,7 @@ class Handler(BaseHTTPRequestHandler):
     def _handle_mcp(self) -> None:
         # Keep auth at the transport boundary: no JSON-RPC method is allowed
         # to run unless the bearer token has already been validated.
+        protocol_version = _requested_protocol_version(self)
         try:
             client_id = self._client_id()
         except Exception as exc:
@@ -182,17 +239,20 @@ class Handler(BaseHTTPRequestHandler):
             method = request.get("method")
             request_id = request.get("id")
             params = request.get("params") or {}
+            if not isinstance(params, dict):
+                raise ValueError("JSON-RPC params must be an object when provided.")
             self.server.registry.audit.log("mcp_request", client_id=client_id, method=method)
             if method == "initialize":
+                protocol_version = _negotiate_protocol_version(self, params)
                 # Minimal MCP handshake. Tool capability discovery happens via
                 # tools/list so the server can keep protocol state stateless.
                 result = {
-                    "protocolVersion": params.get("protocolVersion", "2024-11-05"),
+                    "protocolVersion": protocol_version,
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "mcp4chatgpt", "version": "0.1.0"},
                 }
-            elif method == "notifications/initialized":
-                _json_response(self, 202, {})
+            elif request_id is None:
+                _empty_response(self, 202, {"MCP-Protocol-Version": protocol_version})
                 return
             elif method == "tools/list":
                 result = self.server.registry.list_tools()
@@ -206,11 +266,16 @@ class Handler(BaseHTTPRequestHandler):
             elif method == "tools/call":
                 result = self.server.registry.call_tool(params.get("name", ""), params.get("arguments") or {}, client_id)
             else:
-                _json_response(self, 200, _make_error(-32601, f"Method not found: {method}", request_id))
+                _mcp_json_response(
+                    self,
+                    200,
+                    _make_error(-32601, f"Method not found: {method}", request_id),
+                    protocol_version,
+                )
                 return
-            _json_response(self, 200, _make_result(result, request_id))
+            _mcp_json_response(self, 200, _make_result(result, request_id), protocol_version)
         except Exception as exc:
-            _json_response(self, 200, _make_error(-32000, str(exc), request_id))
+            _mcp_json_response(self, 200, _make_error(-32000, str(exc), request_id), protocol_version)
 
 
 def create_server(config: Config | None = None) -> MCPServer:
