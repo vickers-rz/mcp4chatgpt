@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import os
+import shlex
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -109,6 +112,42 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(entry["ok"])
             self.assertEqual(entry["timeout_sec"], 1)
             self.assertIn("timed out", entry["stderr"])
+
+    def test_timeout_local_command_kills_child_processes(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            pid_file = config.allowed_roots[0] / "child.pid"
+            command = (
+                f"{shlex.quote(sys.executable)} -c "
+                + shlex.quote(
+                    "import pathlib, subprocess, sys; "
+                    "p = subprocess.Popen(['sleep', '30']); "
+                    "pathlib.Path(sys.argv[1]).write_text(str(p.pid)); "
+                    "p.wait()"
+                )
+                + f" {shlex.quote(str(pid_file))}"
+            )
+
+            with self.assertRaises(subprocess.TimeoutExpired):
+                local_ops.run_command(config, command, cwd=str(config.allowed_roots[0]), timeout_sec=1)
+
+            child_pid = int(pid_file.read_text(encoding="utf-8"))
+            deadline = time.time() + 3
+            while time.time() < deadline:
+                if not self._pid_exists(child_pid):
+                    break
+                time.sleep(0.05)
+            self.assertFalse(self._pid_exists(child_pid))
+
+    @staticmethod
+    def _pid_exists(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            return True
+        return True
 
     def test_local_command_log_redacts_secrets(self) -> None:
         with tempfile.TemporaryDirectory() as d:

@@ -3,6 +3,7 @@ from __future__ import annotations
 import difflib
 import json
 import os
+import signal
 import subprocess
 import time
 from collections import deque
@@ -67,6 +68,61 @@ def _command_log_record(
         "ok": ok,
         "truncated": stdout_truncated or stderr_truncated,
     }
+
+
+def _clamp_timeout(timeout_sec: int) -> int:
+    return max(1, min(timeout_sec, 300))
+
+
+def _kill_process_group(proc: subprocess.Popen[str], grace_sec: float = 2.0) -> None:
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+
+    deadline = time.monotonic() + grace_sec
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.05)
+
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return
+
+
+def _run_process(
+    args: str | list[str],
+    *,
+    cwd: Path,
+    timeout_sec: int,
+    shell: bool = False,
+    executable: str | None = None,
+) -> subprocess.CompletedProcess[str]:
+    timeout_sec = _clamp_timeout(timeout_sec)
+    proc = subprocess.Popen(
+        args,
+        cwd=cwd,
+        shell=shell,
+        executable=executable,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_sec)
+    except subprocess.TimeoutExpired as exc:
+        _kill_process_group(proc)
+        stdout, stderr = proc.communicate()
+        raise subprocess.TimeoutExpired(
+            args,
+            timeout_sec,
+            output=stdout if stdout is not None else exc.output,
+            stderr=stderr if stderr is not None else exc.stderr,
+        ) from None
+    return subprocess.CompletedProcess(args, proc.returncode, stdout, stderr)
 
 
 def tail_command_log(config: Config, limit: int = 20) -> dict[str, Any]:
@@ -149,13 +205,10 @@ def apply_patch(config: Config, path: str, old: str, new: str) -> dict[str, Any]
 def _run(config: Config, args: list[str], cwd: str | None, timeout_sec: int = 30) -> dict[str, Any]:
     resolved_cwd = resolve_allowed_path(cwd or ".", config.allowed_roots, must_exist=True)
     start = time.time()
-    proc = subprocess.run(
+    proc = _run_process(
         args,
         cwd=resolved_cwd,
-        text=True,
-        capture_output=True,
-        timeout=max(1, min(timeout_sec, 300)),
-        check=False,
+        timeout_sec=timeout_sec,
     )
     duration_ms = int((time.time() - start) * 1000)
     stdout, stdout_truncated = truncate_text(redact(proc.stdout), config.max_output_chars)
@@ -173,7 +226,7 @@ def _run(config: Config, args: list[str], cwd: str | None, timeout_sec: int = 30
 def run_command(config: Config, command: str, cwd: str | None = None, timeout_sec: int = 30) -> dict[str, Any]:
     raw_command = command
     start = time.time()
-    timeout_sec = max(1, min(timeout_sec, 300))
+    timeout_sec = _clamp_timeout(timeout_sec)
     try:
         command = validate_command(command)
         resolved_cwd = resolve_allowed_path(cwd or ".", config.allowed_roots, must_exist=True)
@@ -198,15 +251,12 @@ def run_command(config: Config, command: str, cwd: str | None = None, timeout_se
     # string remains shell-based for practical ChatGPT usage, so safety checks
     # happen before execution and outputs are redacted after execution.
     try:
-        proc = subprocess.run(
+        proc = _run_process(
             command,
             cwd=resolved_cwd,
             shell=True,
             executable=os.environ.get("SHELL", "/bin/zsh"),
-            text=True,
-            capture_output=True,
-            timeout=timeout_sec,
-            check=False,
+            timeout_sec=timeout_sec,
         )
     except subprocess.TimeoutExpired as exc:
         duration_ms = int((time.time() - start) * 1000)
