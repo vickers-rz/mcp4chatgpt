@@ -1,13 +1,16 @@
-"""ext_ops.py — MCP tool implementations for Chrome extension browser control.
+"""把高层浏览器工具转换为 Chrome 扩展桥接命令。
 
-Each function calls ext_bridge.send_command() which routes the request over
-the live WebSocket to the extension Service Worker, awaits the result, and
-returns a structured dict for the MCP tool response.
+每个函数都调用 :func:`ext_bridge.send_command`，经实时 WebSocket 把请求发送到
+扩展 Service Worker，等待结果后再返回适合 MCP 工具响应的结构化字典。扩展必须
+已经安装并连接；调用其他工具前可先用 :func:`ext_connection_status` 检查状态。
 
-The extension must be installed and connected (popup shows green status) for
-these tools to work.  Use ext_connection_status() to check before calling
-other tools.
+本模块是 ``tools.py`` 与 ``ext_bridge.py`` 之间的适配层：它验证连接、整理参数并
+规范化结果，使工具注册表无需了解 WebSocket、标签页 ID、截图编码或 DOM 事件。
+
+导航、点击、填表和执行 JavaScript 会改变浏览器或外部世界状态，必须与只读操作
+区分，准确标记副作用，并对脚本执行、超时和返回体大小施加更严格限制。
 """
+
 from __future__ import annotations
 
 import base64

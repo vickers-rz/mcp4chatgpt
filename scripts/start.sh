@@ -10,6 +10,25 @@ LAUNCHD_PLIST="$ROOT/deploy/$LAUNCHD_LABEL.plist"
 LAUNCHD_SERVICE="gui/$(id -u)/$LAUNCHD_LABEL"
 TMUX_SESSION="mcp4chatgpt"
 SERVICE_PATTERN="[m]cp4chatgpt.server"
+MCP_BIND_HOST="${MCP_BIND_HOST:-0.0.0.0}"
+MCP_BIND_PORT="${MCP_BIND_PORT:-8766}"
+MCP_HEALTH_HOST="${MCP_HEALTH_HOST:-127.0.0.1}"
+MCP_PUBLIC_BASE_URL="${MCP_PUBLIC_BASE_URL:-https://mcp.runzhe.uk}"
+MCP_EXTERNAL_TUNNEL="${MCP_EXTERNAL_TUNNEL:-1}"
+export MCP_BIND_HOST MCP_BIND_PORT MCP_HEALTH_HOST MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL
+
+health_host() {
+  if [ -n "$MCP_HEALTH_HOST" ]; then
+    echo "$MCP_HEALTH_HOST"
+    return 0
+  fi
+  case "$MCP_BIND_HOST" in
+    0.0.0.0|::) echo "127.0.0.1" ;;
+    *) echo "$MCP_BIND_HOST" ;;
+  esac
+}
+
+LOCAL_HEALTH="http://$(health_host):${MCP_BIND_PORT}/health"
 
 mkdir -p "$ROOT/logs" "$ROOT/data"
 
@@ -28,7 +47,7 @@ if command -v tmux >/dev/null 2>&1 && [ "${MCP_USE_LAUNCHD:-0}" != "1" ]; then
   ok=0
   for _ in 1 2 3 4 5; do
     sleep 1
-    if curl -fsS http://127.0.0.1:8766/health >/dev/null 2>&1; then
+    if curl -fsS "$LOCAL_HEALTH" >/dev/null 2>&1; then
       ok=1
       break
     fi
@@ -43,7 +62,7 @@ if command -v tmux >/dev/null 2>&1 && [ "${MCP_USE_LAUNCHD:-0}" != "1" ]; then
       rm -f "$PID_FILE"
       echo "MCP4ChatGPT started in tmux"
     fi
-    echo "Local health: http://127.0.0.1:8766/health"
+    echo "Local health: $LOCAL_HEALTH"
     exit 0
   fi
 
@@ -64,7 +83,7 @@ if [ "${MCP_USE_LAUNCHD:-0}" = "1" ] && [ "$(uname -s)" = "Darwin" ] && command 
   ok=0
   for _ in 1 2 3 4 5; do
     sleep 1
-    if curl -fsS http://127.0.0.1:8766/health >/dev/null 2>&1; then
+    if curl -fsS "$LOCAL_HEALTH" >/dev/null 2>&1; then
       ok=1
       break
     fi
@@ -79,7 +98,7 @@ if [ "${MCP_USE_LAUNCHD:-0}" = "1" ] && [ "$(uname -s)" = "Darwin" ] && command 
       rm -f "$PID_FILE"
       echo "MCP4ChatGPT started with launchd"
     fi
-    echo "Local health: http://127.0.0.1:8766/health"
+    echo "Local health: $LOCAL_HEALTH"
     exit 0
   fi
 
@@ -108,7 +127,7 @@ echo "$pid" > "$PID_FILE"
 ok=0
 for i in 1 2 3 4 5; do
   sleep 1
-  if kill -0 "$pid" 2>/dev/null && curl -fsS http://127.0.0.1:8766/health >/dev/null 2>&1; then
+  if kill -0 "$pid" 2>/dev/null && curl -fsS "$LOCAL_HEALTH" >/dev/null 2>&1; then
     ok=1
     break
   fi
@@ -116,7 +135,7 @@ done
 
 if [ "$ok" = "1" ]; then
   echo "MCP4ChatGPT started: pid=$pid"
-  echo "Local health: http://127.0.0.1:8766/health"
+  echo "Local health: $LOCAL_HEALTH"
   exit 0
 fi
 

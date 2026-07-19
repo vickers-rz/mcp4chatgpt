@@ -6,14 +6,24 @@ PID_FILE="$ROOT/tmp.cloudflared.pid"
 OUT_LOG="$ROOT/logs/cloudflared.out.log"
 ERR_LOG="$ROOT/logs/cloudflared.err.log"
 CONFIG="$ROOT/deploy/cloudflared-mcp4chatgpt.yml"
-CLOUDFLARED="/opt/homebrew/bin/cloudflared"
+CLOUDFLARED="${CLOUDFLARED:-}"
 TMUX_SESSION="mcp4chatgpt-cloudflared"
 TUNNEL_PATTERN="[c]loudflared tunnel --config $CONFIG run mcp4chatgpt"
 
 mkdir -p "$ROOT/logs"
 
-if [ ! -x "$CLOUDFLARED" ]; then
-  echo "cloudflared not found at $CLOUDFLARED"
+if [ -z "$CLOUDFLARED" ]; then
+  if [ -x "$HOME/.codexpro/bin/cloudflared" ]; then
+    CLOUDFLARED="$HOME/.codexpro/bin/cloudflared"
+  elif command -v cloudflared >/dev/null 2>&1; then
+    CLOUDFLARED="$(command -v cloudflared)"
+  elif [ -x "/opt/homebrew/bin/cloudflared" ]; then
+    CLOUDFLARED="/opt/homebrew/bin/cloudflared"
+  fi
+fi
+
+if [ -z "$CLOUDFLARED" ] || [ ! -x "$CLOUDFLARED" ]; then
+  echo "cloudflared not found. Install it locally with CodexPro or set CLOUDFLARED=/path/to/cloudflared."
   exit 1
 fi
 
@@ -38,9 +48,9 @@ if command -v tmux >/dev/null 2>&1; then
   fi
 
   tmux new-session -d -s "$TMUX_SESSION" -c "$ROOT" \
-    "$CLOUDFLARED tunnel --config '$CONFIG' run mcp4chatgpt >> '$OUT_LOG' 2>> '$ERR_LOG'"
+    "export TUNNEL_TRANSPORT_PROTOCOL=quic; '$CLOUDFLARED' tunnel --config '$CONFIG' run mcp4chatgpt >> '$OUT_LOG' 2>> '$ERR_LOG'"
 else
-  nohup "$CLOUDFLARED" tunnel --config "$CONFIG" run mcp4chatgpt > "$OUT_LOG" 2> "$ERR_LOG" &
+  TUNNEL_TRANSPORT_PROTOCOL=quic nohup "$CLOUDFLARED" tunnel --config "$CONFIG" run mcp4chatgpt > "$OUT_LOG" 2> "$ERR_LOG" &
 fi
 
 ok=0

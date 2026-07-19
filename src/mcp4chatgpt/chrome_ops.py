@@ -1,3 +1,14 @@
+"""通过 macOS AppleScript 读取 Chrome 标签页与页面上下文。
+
+这是无需浏览器扩展时的降级路径：Python 调用 ``osascript``，Chrome 再执行受限的
+标签页查询或页面脚本。与 ``ext_bridge`` 相比，它部署简单，但受 macOS 自动化权限、
+Chrome Apple Events 设置和脚本执行能力限制。
+
+所有跨语言边界都必须转义字符串、限制超时并规范化错误。尤其不能把未经转义的模型
+输入直接嵌入 AppleScript，否则会形成脚本注入。返回页面文本时还需截断，以避免
+单个网页耗尽 MCP 响应预算。
+"""
+
 from __future__ import annotations
 
 import json

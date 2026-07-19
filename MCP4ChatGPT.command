@@ -2,21 +2,47 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-LOCAL_HEALTH="http://127.0.0.1:8766/health"
-PUBLIC_HEALTH="https://mcp.runzhe.uk/health"
-CONNECTOR_URL="https://mcp.runzhe.uk/mcp"
+MCP_BIND_HOST="${MCP_BIND_HOST:-0.0.0.0}"
+MCP_BIND_PORT="${MCP_BIND_PORT:-8766}"
+MCP_PUBLIC_BASE_URL="${MCP_PUBLIC_BASE_URL:-https://mcp.runzhe.uk}"
+MCP_EXTERNAL_TUNNEL="${MCP_EXTERNAL_TUNNEL:-1}"
+MCP_HEALTH_HOST="${MCP_HEALTH_HOST:-127.0.0.1}"
+export MCP_BIND_HOST MCP_BIND_PORT MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL MCP_HEALTH_HOST
+LOCAL_HEALTH=""
+PUBLIC_HEALTH="${MCP_PUBLIC_BASE_URL%/}/health"
+CONNECTOR_URL="${MCP_PUBLIC_BASE_URL%/}/mcp"
 SERVICE_PID_FILE="$ROOT/tmp.service.pid"
 TUNNEL_PID_FILE="$ROOT/tmp.cloudflared.pid"
 SERVICE_PATTERN="[m]cp4chatgpt.server"
 TUNNEL_PATTERN="[c]loudflared tunnel --config .*cloudflared-mcp4chatgpt.yml run mcp4chatgpt"
+
+health_host() {
+  if [ -n "$MCP_HEALTH_HOST" ]; then
+    echo "$MCP_HEALTH_HOST"
+    return 0
+  fi
+  case "$MCP_BIND_HOST" in
+    0.0.0.0|::) echo "127.0.0.1" ;;
+    *) echo "$MCP_BIND_HOST" ;;
+  esac
+}
+
+external_tunnel_enabled() {
+  case "$MCP_EXTERNAL_TUNNEL" in
+    1|true|TRUE|yes|YES|on|ON) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+LOCAL_HEALTH="http://$(health_host):${MCP_BIND_PORT}/health"
 
 usage() {
   cat <<EOF
 MCP4ChatGPT control
 
 Usage:
-  ./MCP4ChatGPT.command start       Start MCP service and Cloudflare Tunnel
-  ./MCP4ChatGPT.command stop        Stop MCP service and Cloudflare Tunnel
+  ./MCP4ChatGPT.command start       Start MCP service and optional Cloudflare Tunnel
+  ./MCP4ChatGPT.command stop        Stop MCP service and optional Cloudflare Tunnel
   ./MCP4ChatGPT.command restart     Stop then start both
   ./MCP4ChatGPT.command clean-restart
                                     Stop, clean Codex/co-te helpers, then start
@@ -107,7 +133,9 @@ status() {
     echo "Local health: unavailable ($LOCAL_HEALTH)"
   fi
 
-  if [ -n "$tpid" ]; then
+  if external_tunnel_enabled; then
+    echo "Cloudflare Tunnel: external"
+  elif [ -n "$tpid" ]; then
     echo "Cloudflare Tunnel: running pid=$tpid"
   else
     echo "Cloudflare Tunnel: stopped"
@@ -120,6 +148,7 @@ status() {
   fi
 
   echo "Connector URL: $CONNECTOR_URL"
+  echo "Bind host: $MCP_BIND_HOST"
 }
 
 start_all() {
@@ -134,7 +163,13 @@ start_all() {
     "$ROOT/scripts/start.sh"
   fi
 
-  if public_ok; then
+  if external_tunnel_enabled; then
+    if public_ok; then
+      echo "External tunnel public health: ready"
+    else
+      echo "External tunnel mode enabled; skipping local cloudflared startup."
+    fi
+  elif public_ok; then
     tpid="$(tunnel_pid)"
     echo "Cloudflare Tunnel already healthy${tpid:+: pid=$tpid}"
   else
@@ -179,7 +214,11 @@ stop_pid() {
 }
 
 stop_all() {
-  stop_pid "Cloudflare Tunnel" "$(tunnel_pid)" "$TUNNEL_PID_FILE"
+  if external_tunnel_enabled; then
+    echo "Cloudflare Tunnel: managed externally"
+  else
+    stop_pid "Cloudflare Tunnel" "$(tunnel_pid)" "$TUNNEL_PID_FILE"
+  fi
   stop_pid "MCP service" "$(service_pid)" "$SERVICE_PID_FILE"
 }
 
@@ -197,7 +236,7 @@ check_all() {
   curl_with_retries "$PUBLIC_HEALTH" 3
   echo
   echo "Checking OAuth discovery..."
-  curl_with_retries "https://mcp.runzhe.uk/.well-known/oauth-authorization-server" 3 | python3 -m json.tool
+  curl_with_retries "${MCP_PUBLIC_BASE_URL%/}/.well-known/oauth-authorization-server" 3 | python3 -m json.tool
 }
 
 open_logs() {
@@ -239,7 +278,7 @@ clean_restart_all() {
 
 interactive_menu() {
   while true; do
-    clear
+    clear 2>/dev/null || true
     status
     cat <<EOF
 
@@ -257,24 +296,30 @@ Choose an action:
   q) Quit
 EOF
     printf "> "
-    read choice
+    read choice || exit 0
+    set +e
     case "$choice" in
-      1) start_all ;;
-      2) stop_all ;;
-      3) restart_all ;;
-      4) check_all ;;
-      5) tail_logs ;;
-      6) open_logs ;;
-      7) rotate_logs ;;
-      8) cleanup_helpers ;;
-      9) clean_restart_all ;;
-      10) echo "$CONNECTOR_URL" ;;
+      1) start_all; action_status=$? ;;
+      2) stop_all; action_status=$? ;;
+      3) restart_all; action_status=$? ;;
+      4) check_all; action_status=$? ;;
+      5) tail_logs; action_status=$? ;;
+      6) open_logs; action_status=$? ;;
+      7) rotate_logs; action_status=$? ;;
+      8) cleanup_helpers; action_status=$? ;;
+      9) clean_restart_all; action_status=$? ;;
+      10) echo "$CONNECTOR_URL"; action_status=$? ;;
       q|Q) exit 0 ;;
-      *) echo "Unknown choice: $choice" ;;
+      *) echo "Unknown choice: $choice"; action_status=2 ;;
     esac
+    set -e
+    if [ "$action_status" -ne 0 ]; then
+      echo
+      echo "Action exited with status $action_status."
+    fi
     echo
     printf "Press Enter to continue..."
-    read _
+    read _ || exit 0
   done
 }
 

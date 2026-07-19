@@ -1,3 +1,15 @@
+"""MCP 工具声明、JSON Schema 与运行时分派中心。
+
+MCP 服务向客户端暴露的核心不是 Python 函数本身，而是一组可发现的工具描述。
+每个 :class:`Tool` 同时包含：稳定的工具名、给模型阅读的说明、用于参数校验和
+生成调用界面的 JSON Schema，以及真正执行本机操作的 handler。
+
+``build_tools()`` 负责声明能力；``ToolRegistry`` 负责执行能力。这种“声明与执行
+分离”的结构非常重要：客户端可先通过 ``tools/list`` 获得机器可读契约，再通过
+``tools/call`` 提交参数。新增工具时，应先设计最小且明确的输入 schema，再把
+安全校验放入具体操作模块，而不是依赖模型遵守自然语言说明。
+"""
+
 from __future__ import annotations
 
 import json
@@ -15,6 +27,13 @@ ToolHandler = Callable[[Config, dict[str, Any]], Any]
 
 @dataclass(frozen=True)
 class Tool:
+    """一项可被 MCP 客户端发现和调用的工具定义。
+
+    ``name`` 是协议级稳定标识；``description`` 主要供模型理解用途；
+    ``input_schema`` 是机器可读的参数契约；``handler`` 才是实际 Python 实现。
+    使用冻结 dataclass 可避免服务运行期间意外改写工具元数据。
+    """
+
     name: str
     description: str
     input_schema: dict[str, Any]
@@ -42,6 +61,11 @@ class Tool:
 
 
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    """构造 MCP 工具参数使用的严格 JSON Schema 对象。
+
+    ``additionalProperties=False`` 会拒绝未声明字段，既能尽早发现模型拼错参数名，
+    也能避免未来新增 handler 参数时被旧客户端无意触发。
+    """
     return {"type": "object", "properties": properties, "required": required or [], "additionalProperties": False}
 
 
@@ -422,6 +446,14 @@ def build_tools() -> list[Tool]:
 
 
 class ToolRegistry:
+    """工具目录及统一调用入口。
+
+    注册表在启动时把工具列表索引为 ``name -> Tool``，使 ``tools/list`` 与
+    ``tools/call`` 使用同一份定义，避免“声明存在但无法执行”或反向漂移。
+    所有调用都在这里记录成功/失败审计事件；异常不被吞掉，而是交给传输层转换为
+    JSON-RPC error，保证客户端能区分正常工具结果与执行失败。
+    """
+
     def __init__(self, config: Config, audit: AuditLogger):
         self.config = config
         self.audit = audit

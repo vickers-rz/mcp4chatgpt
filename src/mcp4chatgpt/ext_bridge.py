@@ -1,18 +1,20 @@
-"""ext_bridge.py — local WebSocket bridge between MCP4ChatGPT and the Chrome extension.
+"""Chrome 扩展与 Python MCP 服务之间的本地 WebSocket 桥。
 
-The extension Service Worker connects to ws://127.0.0.1:<port>?token=<token>.
-The MCP tool handlers call `send_command(cmd, args)` which routes a JSON-RPC
-style request over the live WebSocket and awaits the response.
+扩展的 Service Worker 连接 ``ws://127.0.0.1:<port>?token=<token>``。MCP
+工具处理器调用 :func:`send_command`，本模块再把命令编码成带唯一 ``id`` 的
+JSON 消息发给扩展，并等待扩展回传同一 ``id`` 的结果。
 
-Design notes
-------------
-* One extension connection at a time (single active WebSocket).  If a second
-  client connects with a valid token the old one is cleanly closed.
-* Each request carries a unique ``id``; the extension must echo it in the reply.
-* Timeouts default to 15 s; callers can override per-call.
-* The bridge runs in a dedicated daemon thread with its own asyncio event loop
-  so it does not block the threaded HTTP server.
+这是典型的“同步 MCP 调用 -> 异步浏览器消息”适配层：外部调用看似同步，内部
+实际跨线程、跨事件循环等待响应。``_pending`` 保存尚未完成的 Future；浏览器
+主动上报的事件则通过订阅回调广播。
+
+设计约束：
+- 同时只保留一个扩展连接；新连接通过认证后会替换旧连接。
+- 默认超时为 15 秒，调用者可按操作覆盖。
+- WebSocket 服务运行在独立守护线程和 asyncio 事件循环中，不阻塞 HTTP 服务。
+- 派生令牌用于证明扩展知道服务端密钥；桥接端口只应监听回环地址。
 """
+
 from __future__ import annotations
 
 import asyncio
