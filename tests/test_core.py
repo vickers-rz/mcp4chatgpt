@@ -616,12 +616,14 @@ class CoreTests(unittest.TestCase):
                     return {"content": [{"type": "text", "text": name}]}
 
             with mock.patch.object(terminal_ops, "_load_co_te", return_value=FakeCoTe()):
-                terminal_ops.write_app_text(config, "vscode", "hello", mode="replace_selection", press_return=True, sensitive=True, label="main.py")
-                terminal_ops.inspect_apple_notes_store(config)
+                write_result = terminal_ops.write_app_text(config, "vscode", "hello", mode="replace_selection", press_return=True, sensitive=True, label="main.py")
+                inspect_result = terminal_ops.inspect_apple_notes_store(config)
                 terminal_ops.list_apple_notes_sqlite(config, limit=3, folder="work")
                 terminal_ops.read_apple_note_sqlite(config, "42")
                 terminal_ops.search_apple_notes_sqlite(config, "needle", limit=4)
 
+            self.assertEqual(write_result, "write_app_text")
+            self.assertEqual(inspect_result, "inspect_apple_notes_store")
             self.assertEqual(calls[0][0], "write_app_text")
             self.assertEqual(calls[0][1]["app"], "vscode")
             self.assertEqual(calls[0][1]["mode"], "replace_selection")
@@ -629,6 +631,22 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(calls[2], ("list_apple_notes_sqlite", {"limit": 3, "folder": "work"}))
             self.assertEqual(calls[3], ("read_apple_note_sqlite", {"note_id": "42"}))
             self.assertEqual(calls[4], ("search_apple_notes_sqlite", {"query": "needle", "limit": 4}))
+
+    def test_co_te_tool_registry_response_is_not_double_wrapped(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+
+            class FakeCoTe:
+                def call_tool(self, name: str, arguments: dict[str, object]) -> dict[str, object]:
+                    return {"content": [{"type": "text", "text": "Apple Notes count: 263"}]}
+
+            with mock.patch.object(terminal_ops, "_load_co_te", return_value=FakeCoTe()):
+                registry = ToolRegistry(config, AuditLogger(config.audit_log))
+                result = registry.call_tool("apple_notes_inspect_store", {})
+
+            self.assertEqual(result["content"][0]["text"], "Apple Notes count: 263")
+            self.assertEqual(result["structuredContent"], "Apple Notes count: 263")
+            self.assertNotIn('"content"', result["content"][0]["text"])
 
     def test_audit_log_rotates_and_compresses(self) -> None:
         with tempfile.TemporaryDirectory() as d:

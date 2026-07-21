@@ -36,9 +36,28 @@ def _load_co_te(config: Config) -> ModuleType:
     return module
 
 
-def list_supported_apps(config: Config) -> dict[str, Any]:
+def _call_co_te(config: Config, name: str, arguments: dict[str, Any]) -> Any:
     module = _load_co_te(config)
-    return module.call_tool("list_supported_apps", {})
+    return _unwrap_co_te_result(module.call_tool(name, arguments))
+
+
+def _unwrap_co_te_result(result: Any) -> Any:
+    if not isinstance(result, dict):
+        return result
+    content = result.get("content")
+    if (
+        isinstance(content, list)
+        and len(content) == 1
+        and isinstance(content[0], dict)
+        and content[0].get("type") == "text"
+        and "text" in content[0]
+    ):
+        return content[0]["text"]
+    return result
+
+
+def list_supported_apps(config: Config) -> Any:
+    return _call_co_te(config, "list_supported_apps", {})
 
 
 def get_app_context(
@@ -47,9 +66,9 @@ def get_app_context(
     max_chars: int = 12000,
     redact_secrets: bool = True,
     label: str | None = None,
-) -> dict[str, Any]:
-    module = _load_co_te(config)
-    return module.call_tool(
+) -> Any:
+    return _call_co_te(
+        config,
         "get_app_context",
         {"app": app, "max_chars": max_chars, "redact_secrets": redact_secrets, "label": label},
     )
@@ -63,9 +82,9 @@ def write_app_text(
     press_return: bool = False,
     sensitive: bool = False,
     label: str | None = None,
-) -> dict[str, Any]:
-    module = _load_co_te(config)
-    return module.call_tool(
+) -> Any:
+    return _call_co_te(
+        config,
         "write_app_text",
         {
             "app": app,
@@ -78,29 +97,24 @@ def write_app_text(
     )
 
 
-def inspect_apple_notes_store(config: Config) -> dict[str, Any]:
-    module = _load_co_te(config)
-    return module.call_tool("inspect_apple_notes_store", {})
+def inspect_apple_notes_store(config: Config) -> Any:
+    return _call_co_te(config, "inspect_apple_notes_store", {})
 
 
-def list_apple_notes_sqlite(config: Config, limit: int = 50, folder: str | None = None) -> dict[str, Any]:
-    module = _load_co_te(config)
-    return module.call_tool("list_apple_notes_sqlite", {"limit": limit, "folder": folder})
+def list_apple_notes_sqlite(config: Config, limit: int = 50, folder: str | None = None) -> Any:
+    return _call_co_te(config, "list_apple_notes_sqlite", {"limit": limit, "folder": folder})
 
 
-def read_apple_note_sqlite(config: Config, note_id: str) -> dict[str, Any]:
-    module = _load_co_te(config)
-    return module.call_tool("read_apple_note_sqlite", {"note_id": note_id})
+def read_apple_note_sqlite(config: Config, note_id: str) -> Any:
+    return _call_co_te(config, "read_apple_note_sqlite", {"note_id": note_id})
 
 
-def search_apple_notes_sqlite(config: Config, query: str, limit: int = 20) -> dict[str, Any]:
-    module = _load_co_te(config)
-    return module.call_tool("search_apple_notes_sqlite", {"query": query, "limit": limit})
+def search_apple_notes_sqlite(config: Config, query: str, limit: int = 20) -> Any:
+    return _call_co_te(config, "search_apple_notes_sqlite", {"query": query, "limit": limit})
 
 
-def run_command(config: Config, command: str, app: str = "terminal", label: str | None = None) -> dict[str, Any]:
-    module = _load_co_te(config)
-    return module.call_tool("run_terminal_command", {"command": command, "app": app, "label": label})
+def run_command(config: Config, command: str, app: str = "terminal", label: str | None = None) -> Any:
+    return _call_co_te(config, "run_terminal_command", {"command": command, "app": app, "label": label})
 
 
 def send_input(
@@ -110,9 +124,9 @@ def send_input(
     sensitive: bool = False,
     app: str = "terminal",
     label: str | None = None,
-) -> dict[str, Any]:
-    module = _load_co_te(config)
-    return module.call_tool(
+) -> Any:
+    return _call_co_te(
+        config,
         "send_terminal_input",
         {
             "text": text,
