@@ -16,7 +16,7 @@ from unittest import mock
 
 from mcp4chatgpt.audit import AuditLogger
 from mcp4chatgpt.config import Config
-from mcp4chatgpt import ext_ops, knowledge_ops, local_ops, web_ops
+from mcp4chatgpt import ext_ops, knowledge_ops, local_ops, terminal_ops, web_ops
 from mcp4chatgpt.oauth import issue_token, register_client, verify_token
 from mcp4chatgpt.safety import resolve_allowed_path, validate_command
 from mcp4chatgpt.tools import ToolRegistry
@@ -537,6 +537,12 @@ class CoreTests(unittest.TestCase):
             self.assertIn("web_search", names)
             self.assertIn("knowledge_search", names)
             self.assertIn("terminal_get_app_context", names)
+            self.assertIn("app_get_context", names)
+            self.assertIn("app_write_text", names)
+            self.assertIn("apple_notes_inspect_store", names)
+            self.assertIn("apple_notes_list_sqlite", names)
+            self.assertIn("apple_notes_read_sqlite", names)
+            self.assertIn("apple_notes_search_sqlite", names)
             self.assertIn("local_run_command", names)
             self.assertIn("local_command_log_tail", names)
             # Browser extension tools
@@ -576,6 +582,53 @@ class CoreTests(unittest.TestCase):
             self.assertIn("background shell execution logs", tools["local_command_log_tail"]["description"])
             self.assertIn("press Return", tools["terminal_run_command"]["description"])
             self.assertIn("press_return=false", tools["terminal_send_input"]["description"])
+            self.assertIn("any co-te supported macOS app", tools["app_get_context"]["description"])
+            self.assertIn("Accessibility", tools["app_write_text"]["description"])
+
+    def test_co_te_app_schemas_expose_non_terminal_apps(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            registry = ToolRegistry(config, AuditLogger(config.audit_log))
+            tools = {tool["name"]: tool for tool in registry.list_tools()["tools"]}
+
+            terminal_apps = tools["terminal_get_app_context"]["inputSchema"]["properties"]["app"]["enum"]
+            app_apps = tools["app_get_context"]["inputSchema"]["properties"]["app"]["enum"]
+
+            self.assertIn("apple_notes", terminal_apps)
+            self.assertIn("vscode", terminal_apps)
+            self.assertIn("cursor", app_apps)
+            self.assertIn("warp", app_apps)
+            self.assertEqual(
+                tools["app_write_text"]["inputSchema"]["properties"]["mode"]["enum"],
+                ["insert", "replace_selection", "replace_all"],
+            )
+            self.assertFalse(tools["app_write_text"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["apple_notes_search_sqlite"]["annotations"]["readOnlyHint"])
+
+    def test_co_te_wrappers_forward_new_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            calls: list[tuple[str, dict[str, object]]] = []
+
+            class FakeCoTe:
+                def call_tool(self, name: str, arguments: dict[str, object]) -> dict[str, object]:
+                    calls.append((name, arguments))
+                    return {"content": [{"type": "text", "text": name}]}
+
+            with mock.patch.object(terminal_ops, "_load_co_te", return_value=FakeCoTe()):
+                terminal_ops.write_app_text(config, "vscode", "hello", mode="replace_selection", press_return=True, sensitive=True, label="main.py")
+                terminal_ops.inspect_apple_notes_store(config)
+                terminal_ops.list_apple_notes_sqlite(config, limit=3, folder="work")
+                terminal_ops.read_apple_note_sqlite(config, "42")
+                terminal_ops.search_apple_notes_sqlite(config, "needle", limit=4)
+
+            self.assertEqual(calls[0][0], "write_app_text")
+            self.assertEqual(calls[0][1]["app"], "vscode")
+            self.assertEqual(calls[0][1]["mode"], "replace_selection")
+            self.assertEqual(calls[1], ("inspect_apple_notes_store", {}))
+            self.assertEqual(calls[2], ("list_apple_notes_sqlite", {"limit": 3, "folder": "work"}))
+            self.assertEqual(calls[3], ("read_apple_note_sqlite", {"note_id": "42"}))
+            self.assertEqual(calls[4], ("search_apple_notes_sqlite", {"query": "needle", "limit": 4}))
 
     def test_audit_log_rotates_and_compresses(self) -> None:
         with tempfile.TemporaryDirectory() as d:

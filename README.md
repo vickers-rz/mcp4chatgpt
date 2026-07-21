@@ -156,7 +156,9 @@ separate `mcpo` proxy.
 ## Tool Groups
 
 - `local_*`: allowed-root file access, safe command execution, read-only Git, exact-text patching
-- `terminal_*`: Terminal.app, iTerm2, and Termius context/input via `co-te.py`
+- `terminal_*`: compatibility tools for co-te terminal context/input and visible terminal commands
+- `app_*`: co-te macOS app context reads and Accessibility-backed text writeback
+- `apple_notes_*`: read-only Apple Notes SQLite inspection, listing, reading, and search through co-te
 - `chrome_*` / `browser_*`: lightweight Google Chrome fallback via local AppleScript; no extension required
 - `ext_*`: enhanced Chrome tab context and interaction through the optional unpacked Chrome extension
 - `web_*`: Firecrawl-backed search, scrape, crawl, map, extract, interact, and add-to-knowledge
@@ -265,4 +267,4 @@ login background item unless you explicitly install and modify it.
 
 This is a full local-ops server. It can read/write allowed files and run allowed commands. Keep it behind OAuth and HTTPS. Set `MCP_ALLOWED_ROOTS` narrowly. The HTTP server rejects unknown `Host` headers by default; use `MCP_ALLOWED_HOSTS` only for additional trusted reverse-proxy hostnames.
 
-Terminal tools reuse `/Users/vickers/Documents/MCP_Creator/codex_work_with_apps/co-te.py`; macOS Automation and Accessibility permissions still apply to the process running this server.
+co-te tools reuse `/Users/vickers/Documents/MCP_Creator/codex_work_with_apps/co-te.py`; macOS Automation, Accessibility, and Apple Notes Full Disk Access permissions still apply to the process running this server.

@@ -24,6 +24,40 @@ from . import chrome_ops, ext_ops, knowledge_ops, local_ops, terminal_ops, web_o
 
 ToolHandler = Callable[[Config, dict[str, Any]], Any]
 
+CO_TE_APP_KEYS = [
+    "android_studio",
+    "appcode",
+    "apple_notes",
+    "bbedit",
+    "clion",
+    "cursor",
+    "datagrip",
+    "goland",
+    "intellij",
+    "iterm2",
+    "notion",
+    "phpstorm",
+    "prompt",
+    "pycharm",
+    "quip",
+    "rider",
+    "rubymine",
+    "script_editor",
+    "sublime_text",
+    "terminal",
+    "termius",
+    "textedit",
+    "vscode",
+    "vscode_insiders",
+    "vscodium",
+    "warp",
+    "webstorm",
+    "windsurf",
+    "xcode",
+]
+
+CO_TE_TERMINAL_APP_KEYS = ["terminal", "iterm2", "termius"]
+
 
 @dataclass(frozen=True)
 class Tool:
@@ -79,6 +113,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "local_write_file",
         "local_apply_patch",
         "local_run_command",
+        "app_write_text",
         "terminal_run_command",
         "terminal_send_input",
         "web_add_to_knowledge",
@@ -90,8 +125,12 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
     }
     open_world = name.startswith("web_") or name in {
         "local_run_command",
+        "app_get_context",
+        "app_write_text",
         "terminal_run_command",
         "terminal_send_input",
+        "terminal_list_supported_apps",
+        "terminal_get_app_context",
         "chrome_list_tabs",
         "chrome_get_active_tab_context",
         "browser_list_tabs",
@@ -115,6 +154,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "local_write_file",
         "local_apply_patch",
         "local_run_command",
+        "app_write_text",
         "terminal_run_command",
         "terminal_send_input",
         "ext_navigate",
@@ -216,7 +256,12 @@ def build_tools() -> list[Tool]:
             _schema({"cwd": {"type": "string"}, "rev": {"type": "string", "default": "HEAD"}, "max_chars": {"type": "integer"}}, ["cwd"]),
             lambda c, a: local_ops.git_show(c, a["cwd"], a.get("rev", "HEAD"), a.get("max_chars")),
         ),
-        Tool("terminal_list_supported_apps", "List supported macOS terminal apps.", _schema({}), lambda c, a: terminal_ops.list_supported_apps(c)),
+        Tool(
+            "terminal_list_supported_apps",
+            "List all macOS apps supported by co-te, including read/write capability flags.",
+            _schema({}),
+            lambda c, a: terminal_ops.list_supported_apps(c),
+        ),
         Tool(
             "chrome_list_tabs",
             "List titles and URLs for open Google Chrome tabs on this Mac. Does not read page body text.",
@@ -272,20 +317,74 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "terminal_get_app_context",
-            "Read recent context from Terminal.app, iTerm2, or Termius.",
-            _schema({"app": {"type": "string", "enum": ["terminal", "iterm2", "termius"]}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string"}}, ["app"]),
+            "Compatibility alias for app_get_context. Read recent context from any co-te supported macOS app.",
+            _schema({"app": {"type": "string", "enum": CO_TE_APP_KEYS}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string"}}, ["app"]),
             lambda c, a: terminal_ops.get_app_context(c, a["app"], int(a.get("max_chars", 12000)), bool(a.get("redact_secrets", True)), a.get("label")),
+        ),
+        Tool(
+            "app_get_context",
+            "Read selected text, focused editor content, window context, or terminal history from any co-te supported macOS app.",
+            _schema({"app": {"type": "string", "enum": CO_TE_APP_KEYS}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string"}}, ["app"]),
+            lambda c, a: terminal_ops.get_app_context(c, a["app"], int(a.get("max_chars", 12000)), bool(a.get("redact_secrets", True)), a.get("label")),
+        ),
+        Tool(
+            "app_write_text",
+            "Paste text into any co-te supported macOS app through Accessibility. Use mode insert, replace_selection, or replace_all.",
+            _schema(
+                {
+                    "app": {"type": "string", "enum": CO_TE_APP_KEYS},
+                    "text": {"type": "string"},
+                    "mode": {"type": "string", "enum": ["insert", "replace_selection", "replace_all"], "default": "insert"},
+                    "press_return": {"type": "boolean", "default": False},
+                    "sensitive": {"type": "boolean", "default": False},
+                    "label": {"type": "string"},
+                },
+                ["app", "text"],
+            ),
+            lambda c, a: terminal_ops.write_app_text(
+                c,
+                a["app"],
+                a["text"],
+                a.get("mode", "insert"),
+                bool(a.get("press_return", False)),
+                bool(a.get("sensitive", False)),
+                a.get("label"),
+            ),
+        ),
+        Tool(
+            "apple_notes_inspect_store",
+            "Inspect the local Apple Notes SQLite store and record counts through co-te. Read-only.",
+            _schema({}),
+            lambda c, a: terminal_ops.inspect_apple_notes_store(c),
+        ),
+        Tool(
+            "apple_notes_list_sqlite",
+            "List Apple Notes from a read-only local SQLite snapshot through co-te.",
+            _schema({"limit": {"type": "integer", "default": 50}, "folder": {"type": "string"}}),
+            lambda c, a: terminal_ops.list_apple_notes_sqlite(c, int(a.get("limit", 50)), a.get("folder")),
+        ),
+        Tool(
+            "apple_notes_read_sqlite",
+            "Read one Apple Note by UUID or numeric primary key from a read-only SQLite snapshot through co-te.",
+            _schema({"note_id": {"type": "string"}}, ["note_id"]),
+            lambda c, a: terminal_ops.read_apple_note_sqlite(c, a["note_id"]),
+        ),
+        Tool(
+            "apple_notes_search_sqlite",
+            "Search Apple Notes title, snippet, and decoded body text from a read-only SQLite snapshot through co-te.",
+            _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 20}}, ["query"]),
+            lambda c, a: terminal_ops.search_apple_notes_sqlite(c, a["query"], int(a.get("limit", 20))),
         ),
         Tool(
             "terminal_run_command",
             "Send a visible command to the front Terminal.app/iTerm2/Termius tab and press Return.",
-            _schema({"command": {"type": "string"}, "app": {"type": "string", "enum": ["terminal", "iterm2", "termius"], "default": "terminal"}, "label": {"type": "string"}}, ["command"]),
+            _schema({"command": {"type": "string"}, "app": {"type": "string", "enum": CO_TE_TERMINAL_APP_KEYS, "default": "terminal"}, "label": {"type": "string"}}, ["command"]),
             lambda c, a: terminal_ops.run_command(c, a["command"], a.get("app", "terminal"), a.get("label")),
         ),
         Tool(
             "terminal_send_input",
             "Type or paste text into Terminal.app/iTerm2/Termius; set press_return=false to paste without executing.",
-            _schema({"text": {"type": "string"}, "press_return": {"type": "boolean", "default": True}, "sensitive": {"type": "boolean", "default": False}, "app": {"type": "string", "enum": ["terminal", "iterm2", "termius"], "default": "terminal"}, "label": {"type": "string"}}, ["text"]),
+            _schema({"text": {"type": "string"}, "press_return": {"type": "boolean", "default": True}, "sensitive": {"type": "boolean", "default": False}, "app": {"type": "string", "enum": CO_TE_TERMINAL_APP_KEYS, "default": "terminal"}, "label": {"type": "string"}}, ["text"]),
             lambda c, a: terminal_ops.send_input(c, a["text"], bool(a.get("press_return", True)), bool(a.get("sensitive", False)), a.get("app", "terminal"), a.get("label")),
         ),
         Tool("web_search", "Search the web via Firecrawl.", _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]), lambda c, a: web_ops.search(c, a["query"], int(a.get("limit", 5)))),

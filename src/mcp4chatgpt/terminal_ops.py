@@ -55,6 +55,49 @@ def get_app_context(
     )
 
 
+def write_app_text(
+    config: Config,
+    app: str,
+    text: str,
+    mode: str = "insert",
+    press_return: bool = False,
+    sensitive: bool = False,
+    label: str | None = None,
+) -> dict[str, Any]:
+    module = _load_co_te(config)
+    return module.call_tool(
+        "write_app_text",
+        {
+            "app": app,
+            "text": text,
+            "mode": mode,
+            "press_return": press_return,
+            "sensitive": sensitive,
+            "label": label,
+        },
+    )
+
+
+def inspect_apple_notes_store(config: Config) -> dict[str, Any]:
+    module = _load_co_te(config)
+    return module.call_tool("inspect_apple_notes_store", {})
+
+
+def list_apple_notes_sqlite(config: Config, limit: int = 50, folder: str | None = None) -> dict[str, Any]:
+    module = _load_co_te(config)
+    return module.call_tool("list_apple_notes_sqlite", {"limit": limit, "folder": folder})
+
+
+def read_apple_note_sqlite(config: Config, note_id: str) -> dict[str, Any]:
+    module = _load_co_te(config)
+    return module.call_tool("read_apple_note_sqlite", {"note_id": note_id})
+
+
+def search_apple_notes_sqlite(config: Config, query: str, limit: int = 20) -> dict[str, Any]:
+    module = _load_co_te(config)
+    return module.call_tool("search_apple_notes_sqlite", {"query": query, "limit": limit})
+
+
 def run_command(config: Config, command: str, app: str = "terminal", label: str | None = None) -> dict[str, Any]:
     module = _load_co_te(config)
     return module.call_tool("run_terminal_command", {"command": command, "app": app, "label": label})
@@ -79,4 +122,3 @@ def send_input(
             "label": label,
         },
     )
-
