@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from base64 import b64encode
 from dataclasses import replace
 from pathlib import Path
@@ -275,6 +276,53 @@ class CoreTests(unittest.TestCase):
                 result = web_ops.brave_search(config, "test", limit=3)
             self.assertEqual(result, payload)
 
+    def test_brave_get_retries_one_transient_network_error(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), brave_api_key="brave-key")
+            payload = {"web": {"results": [{"title": "Example", "url": "https://example.test"}]}}
+
+            with (
+                mock.patch(
+                    "urllib.request.urlopen",
+                    side_effect=[urllib.error.URLError("temporary"), FakeHTTPResponse(payload)],
+                ) as urlopen,
+                mock.patch("mcp4chatgpt.web_ops.time.sleep"),
+            ):
+                result = web_ops.brave_search(config, "test")
+
+            self.assertEqual(result, payload)
+            self.assertEqual(urlopen.call_count, 2)
+
+    def test_firecrawl_post_does_not_retry_network_error(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), firecrawl_api_key="fc-key")
+
+            with mock.patch(
+                "urllib.request.urlopen",
+                side_effect=urllib.error.URLError("response lost"),
+            ) as urlopen:
+                with self.assertRaisesRegex(RuntimeError, "Firecrawl request failed"):
+                    web_ops.crawl(config, "https://example.test")
+
+            self.assertEqual(urlopen.call_count, 1)
+
+    def test_firecrawl_read_only_search_retries_one_network_error(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), firecrawl_api_key="fc-key")
+            payload = {"data": [{"title": "Example", "url": "https://example.test"}]}
+
+            with (
+                mock.patch(
+                    "urllib.request.urlopen",
+                    side_effect=[urllib.error.URLError("temporary"), FakeHTTPResponse(payload)],
+                ) as urlopen,
+                mock.patch("mcp4chatgpt.web_ops.time.sleep"),
+            ):
+                result = web_ops.search(config, "test")
+
+            self.assertEqual(result, payload)
+            self.assertEqual(urlopen.call_count, 2)
+
     def test_combined_search_can_fetch_brave_results_with_firecrawl(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = replace(make_config(Path(d)), brave_api_key="brave-key", firecrawl_api_key="fc-key")
@@ -299,6 +347,27 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(result["results"][0]["markdown"], "# Example\nBody")
             self.assertEqual([method for method, _ in calls], ["GET", "POST"])
 
+    def test_brave_extra_snippets_are_merged_into_snippet(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), brave_api_key="brave-key")
+            payload = {
+                "web": {
+                    "results": [
+                        {
+                            "title": "Example",
+                            "url": "https://example.test",
+                            "description": "Primary summary",
+                            "extra_snippets": ["Additional context", "Primary summary"],
+                        },
+                    ]
+                }
+            }
+
+            with mock.patch("urllib.request.urlopen", return_value=FakeHTTPResponse(payload)):
+                result = web_ops.combined_search(config, "test", engine="brave")
+
+            self.assertEqual(result["results"][0]["snippet"], "Primary summary\nAdditional context")
+
     def test_combined_search_auto_falls_back_when_brave_has_no_results(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = replace(make_config(Path(d)), brave_api_key="brave-key", firecrawl_api_key="fc-key")
@@ -315,6 +384,31 @@ class CoreTests(unittest.TestCase):
 
             self.assertEqual(result["engine"], "firecrawl")
             self.assertEqual(result["results"][0]["source"], "firecrawl")
+            self.assertIn("no web results", result["fallback_reason"])
+
+    def test_combined_search_keeps_results_when_firecrawl_fetch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), brave_api_key="brave-key")
+            brave_payload = {
+                "web": {
+                    "results": [
+                        {"title": "Example", "url": "https://example.test", "description": "Snippet"},
+                    ]
+                }
+            }
+
+            with (
+                mock.patch("mcp4chatgpt.web_ops.brave_search", return_value=brave_payload),
+                mock.patch(
+                    "mcp4chatgpt.web_ops.scrape",
+                    side_effect=web_ops.WebOpsNotConfigured("FIRECRAWL_API_KEY is not set"),
+                ),
+            ):
+                result = web_ops.combined_search(config, "test", engine="brave", fetch_content=True)
+
+            self.assertEqual(result["results"][0]["url"], "https://example.test")
+            self.assertIn("FIRECRAWL_API_KEY", result["results"][0]["fetch_error"])
+
 
     def test_chrome_tools_are_listed_as_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -422,6 +516,28 @@ class CoreTests(unittest.TestCase):
             )
             self.assertEqual(result["element_tag"], "TEXTAREA")
             self.assertEqual(result["error"], "setter failed")
+
+    def test_ext_run_js_preserves_execution_world(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabId": 7,
+                "result": "42",
+                "resultType": "number",
+                "executionWorld": "USER_SCRIPT",
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_run_js(config, "6 * 7", tab_id=7)
+
+            send.assert_called_once_with(
+                "run_js",
+                {"code": "6 * 7", "tabId": 7},
+                timeout=30,
+            )
+            self.assertEqual(result["result"], "42")
+            self.assertEqual(result["type"], "number")
+            self.assertEqual(result["execution_world"], "USER_SCRIPT")
 
     def test_ext_listen_changes_waits_and_unsubscribes(self) -> None:
         with tempfile.TemporaryDirectory() as d:

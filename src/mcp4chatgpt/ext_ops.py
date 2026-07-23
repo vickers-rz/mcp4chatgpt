@@ -334,7 +334,12 @@ def ext_run_js(
     result = ext_bridge.send_command("run_js", args, timeout=30)
 
     if error := result.get("error"):
-        return {"tab_id": result.get("tabId"), "error": str(error), "result": None}
+        return {
+            "tab_id": result.get("tabId"),
+            "error": str(error),
+            "result": None,
+            "execution_world": result.get("executionWorld"),
+        }
 
     raw_result = result.get("result")
     result_str = (
@@ -348,6 +353,7 @@ def ext_run_js(
         "result": result_str,
         "truncated": truncated,
         "type": result.get("resultType", "unknown"),
+        "execution_world": result.get("executionWorld"),
     }
 
 

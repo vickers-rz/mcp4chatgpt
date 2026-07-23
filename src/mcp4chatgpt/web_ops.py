@@ -25,9 +25,16 @@ class WebOpsNotConfigured(RuntimeError):
     pass
 
 
-def _open_json(req: urllib.request.Request, *, timeout: int, provider: str) -> dict[str, Any]:
+def _open_json(
+    req: urllib.request.Request,
+    *,
+    timeout: int,
+    provider: str,
+    retries: int = 0,
+) -> dict[str, Any]:
     last_error: Exception | None = None
-    for attempt in range(2):
+    attempts = max(1, retries + 1)
+    for attempt in range(attempts):
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 return json.loads(resp.read().decode("utf-8"))
@@ -35,7 +42,7 @@ def _open_json(req: urllib.request.Request, *, timeout: int, provider: str) -> d
             raise
         except (urllib.error.URLError, http.client.HTTPException, ConnectionError, TimeoutError, OSError) as exc:
             last_error = exc
-            if attempt == 0:
+            if attempt + 1 < attempts:
                 time.sleep(0.25)
     assert last_error is not None
     detail = getattr(last_error, "reason", last_error)
@@ -46,6 +53,8 @@ def _firecrawl_request(
     config: Config,
     endpoint: str,
     payload: dict[str, Any],
+    *,
+    retries: int = 0,
 ) -> dict[str, Any]:
     if not config.firecrawl_api_key:
         raise WebOpsNotConfigured("web_ops_not_configured: FIRECRAWL_API_KEY is not set.")
@@ -64,7 +73,7 @@ def _firecrawl_request(
         method="POST",
     )
     try:
-        return _open_json(req, timeout=60, provider="Firecrawl")
+        return _open_json(req, timeout=60, provider="Firecrawl", retries=retries)
     except urllib.error.HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Firecrawl request failed: HTTP {exc.code}: {text}") from exc
@@ -84,7 +93,7 @@ def _brave_request(config: Config, endpoint: str, params: dict[str, Any]) -> dic
         method="GET",
     )
     try:
-        return _open_json(req, timeout=30, provider="Brave")
+        return _open_json(req, timeout=30, provider="Brave", retries=1)
     except urllib.error.HTTPError as exc:
         text = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Brave request failed: HTTP {exc.code}: {text}") from exc
@@ -93,7 +102,17 @@ def _brave_request(config: Config, endpoint: str, params: dict[str, Any]) -> dic
 def _normalize_search_result(item: dict[str, Any], source: str) -> dict[str, Any]:
     url = str(item.get("url") or item.get("link") or "")
     title = str(item.get("title") or item.get("name") or url)
-    snippet = str(item.get("description") or item.get("snippet") or item.get("content") or "")
+    snippet_parts = [str(item.get("description") or item.get("snippet") or item.get("content") or "")]
+    extra_snippets = item.get("extra_snippets")
+    if isinstance(extra_snippets, list):
+        snippet_parts.extend(str(part) for part in extra_snippets if part)
+    seen_snippets: set[str] = set()
+    unique_snippets: list[str] = []
+    for part in snippet_parts:
+        if part and part not in seen_snippets:
+            seen_snippets.add(part)
+            unique_snippets.append(part)
+    snippet = "\n".join(unique_snippets)
     return {
         "title": title,
         "url": url,
@@ -124,7 +143,7 @@ def _brave_items(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 def search(config: Config, query: str, limit: int = 5, **options: Any) -> dict[str, Any]:
     payload = {"query": query, "limit": max(1, min(limit, 20)), **{k: v for k, v in options.items() if v is not None}}
-    return _firecrawl_request(config, "/v2/search", payload)
+    return _firecrawl_request(config, "/v2/search", payload, retries=1)
 
 
 def brave_search(config: Config, query: str, limit: int = 5, **options: Any) -> dict[str, Any]:
@@ -148,6 +167,7 @@ def combined_search(
 ) -> dict[str, Any]:
     engine = (engine or "brave").strip().lower()
     selected_engine = engine
+    fallback_reason: str | None = None
     if engine in {"brave", "brave_search"}:
         raw = brave_search(config, query, limit)
         results = [_normalize_search_result(item, "brave") for item in _brave_items(raw)]
@@ -163,7 +183,8 @@ def combined_search(
             if not results:
                 raise RuntimeError("Brave returned no web results.")
             selected_engine = "brave"
-        except (WebOpsNotConfigured, RuntimeError):
+        except (WebOpsNotConfigured, RuntimeError) as exc:
+            fallback_reason = str(exc)
             raw = search(config, query, limit)
             results = [_normalize_search_result(item, "firecrawl") for item in _firecrawl_items(raw)]
             selected_engine = "firecrawl"
@@ -174,19 +195,26 @@ def combined_search(
         for result in results[: max(0, min(fetch_limit, len(results)))]:
             if not result["url"]:
                 continue
-            scraped = scrape(config, result["url"], formats=["markdown"])
+            try:
+                scraped = scrape(config, result["url"], formats=["markdown"])
+            except RuntimeError as exc:
+                result["fetch_error"] = str(exc)
+                continue
             data = scraped.get("data", scraped)
             if isinstance(data, dict):
                 markdown = data.get("markdown") or data.get("content")
                 if markdown:
                     result["markdown"] = markdown
 
-    return {"query": query, "engine": selected_engine, "results": results, "raw": raw}
+    response = {"query": query, "engine": selected_engine, "results": results, "raw": raw}
+    if fallback_reason:
+        response["fallback_reason"] = fallback_reason
+    return response
 
 
 def scrape(config: Config, url: str, formats: list[str] | None = None, **options: Any) -> dict[str, Any]:
     payload = {"url": url, "formats": formats or ["markdown"], **{k: v for k, v in options.items() if v is not None}}
-    return _firecrawl_request(config, "/v2/scrape", payload)
+    return _firecrawl_request(config, "/v2/scrape", payload, retries=1)
 
 
 def crawl(config: Config, url: str, limit: int = 10, max_depth: int = 2, **options: Any) -> dict[str, Any]:
@@ -201,7 +229,7 @@ def crawl(config: Config, url: str, limit: int = 10, max_depth: int = 2, **optio
 
 def map_site(config: Config, url: str, limit: int = 100, **options: Any) -> dict[str, Any]:
     payload = {"url": url, "limit": max(1, min(limit, 1000)), **{k: v for k, v in options.items() if v is not None}}
-    return _firecrawl_request(config, "/v2/map", payload)
+    return _firecrawl_request(config, "/v2/map", payload, retries=1)
 
 
 def extract(config: Config, urls: list[str], prompt: str | None = None, schema: dict[str, Any] | None = None) -> dict[str, Any]:

@@ -158,9 +158,12 @@ Open WebUI can also use MCP4ChatGPT as an External Web Search provider:
 - Enable Web Search: `on`
 - Search Engine: `external`
 - External Search URL: `http://127.0.0.1:8766/search`
+- External Search API Key: leave blank
 
-The `/search` endpoint is separate from `/mcp`. It accepts both GET query
-parameters and JSON POST bodies:
+The `/search` endpoint is separate from `/mcp` and is intentionally restricted
+to localhost requests. Do not configure the public `mcp.runzhe.uk/search` URL.
+Open WebUI sends a JSON POST body and receives the result array its External
+Search API expects. GET remains available locally for diagnostics.
 
 ```text
 /search?q=latest OpenAI news&engine=brave
@@ -171,7 +174,12 @@ parameters and JSON POST bodies:
 Use `engine=brave` for fast URL discovery through Brave Search. Use
 `engine=firecrawl` to search through Firecrawl. Add `fetch=true` only when you
 want MCP4ChatGPT to scrape the top results through Firecrawl and include page
-markdown, because that consumes Firecrawl credits.
+markdown, because that consumes Firecrawl credits. Open WebUI normally uses
+`OPEN_WEBUI_SEARCH_DEFAULT_ENGINE`; to force an engine in its admin settings,
+append `?engine=brave`, `?engine=firecrawl`, or `?engine=auto` to the External
+Search URL. In `auto` mode, Brave is tried first and Firecrawl is used when
+Brave is unavailable or returns no web results. If an optional Firecrawl page
+fetch fails, the original search result is retained without page markdown.
 
 ## Tool Groups
 
@@ -231,9 +239,17 @@ PY
 By default screenshots are saved under `data/screenshots/` and MCP returns the
 file path instead of embedding the full image payload. `ext_run_js` remains
 disabled until you explicitly enable "Allow JS execution" in the extension
-popup. On Chrome 138 and newer, also open the extension's details page and
-enable Chrome's "Allow User Scripts" setting. The tool runs in Chrome's isolated
-User Scripts world so target-page CSP does not require `unsafe-eval`.
+popup. Direct User Scripts execution requires Chrome 135 or newer. On Chrome
+138 and newer, also open the extension's details page and enable Chrome's
+"Allow User Scripts" setting. The tool prefers `chrome.userScripts.execute` in
+Chrome's isolated User Scripts world, so target-page CSP does not require
+`unsafe-eval`. A MAIN-world `chrome.scripting.executeScript` path is retained
+only as a compatibility fallback when the User Scripts API is unavailable.
+Requiring the per-extension User Scripts permission is an intentional security
+and compatibility decision for this project's local modern-Chrome target, not
+a defect or a reason to reverse the execution order. See
+[`docs/chrome_extension.md`](docs/chrome_extension.md#user-scripts-兼容性设计决策)
+for the rationale and official Chrome references.
 
 ## Command Execution Modes
 

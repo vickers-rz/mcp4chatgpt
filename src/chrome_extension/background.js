@@ -157,6 +157,16 @@ function activeChangeSubscriptionFor(tabId) {
   return !changeSubscription.tabId || changeSubscription.tabId === tabId;
 }
 
+function serializeScriptValue(value) {
+  const resultType = typeof value;
+  let result;
+  if (value === null || value === undefined) result = String(value);
+  else if (resultType === "object") {
+    try { result = JSON.stringify(value); } catch { result = String(value); }
+  } else result = String(value);
+  return { result, resultType };
+}
+
 // ---------------------------------------------------------------------------
 // Icon state
 // ---------------------------------------------------------------------------
@@ -247,20 +257,6 @@ async function cmdListTabs({ maxTabs = 100 }) {
 async function cmdGetActiveTab({ includeText = true, includeSelection = true, includeMeta = true }) {
   const [tab] = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
   if (!tab) throw new Error("No active tab found");
-
-  const jsCode = `
-  (() => {
-    const meta = {};
-    for (const el of Array.from(document.querySelectorAll("meta"))) {
-      const k = el.getAttribute("name") || el.getAttribute("property");
-      const v = el.getAttribute("content");
-      if (k && v && k.length < 120 && v.length < 2000) meta[k] = v;
-    }
-    const selection = String(window.getSelection ? window.getSelection() : "");
-    const text = document.body ? document.body.innerText : "";
-    return JSON.stringify({ title: document.title, url: location.href, meta, selection, text });
-  })()
-  `;
 
   let pageData = {};
   try {
@@ -443,12 +439,17 @@ async function cmdFillInput({ selector, value, tabId, submit = false }) {
       if (doSub && filled) {
         const form = el.form || el.closest("form");
         if (!form) {
-          return {
-            filled,
-            submitted: false,
-            tagName: el.tagName,
-            error: `No form found for element: ${s}`,
-          };
+          for (const type of ["keydown", "keypress", "keyup"]) {
+            el.dispatchEvent(new KeyboardEvent(type, {
+              key: "Enter",
+              code: "Enter",
+              keyCode: 13,
+              which: 13,
+              bubbles: true,
+              cancelable: true,
+            }));
+          }
+          return { filled, submitted: true, tagName: el.tagName, submitMethod: "enter_key" };
         }
 
         try {
@@ -480,35 +481,37 @@ async function cmdRunJs({ code, tabId }) {
   }
   const tab = await getTargetTab(tabId);
 
-  if (!chrome.userScripts || typeof chrome.userScripts.execute !== "function") {
-    return {
-      tabId: tab.id,
-      result: null,
-      error: "Chrome User Scripts is unavailable. Open this extension's details page and enable 'Allow User Scripts'.",
-      resultType: "error",
-    };
+  if (chrome.userScripts && typeof chrome.userScripts.execute === "function") {
+    try {
+      const [injection] = await chrome.userScripts.execute({
+        target: { tabId: tab.id },
+        world: "USER_SCRIPT",
+        js: [{ code }],
+      });
+
+      if (injection.error) {
+        return { tabId: tab.id, result: null, error: injection.error, resultType: "error" };
+      }
+
+      return { tabId: tab.id, ...serializeScriptValue(injection.result), executionWorld: "USER_SCRIPT" };
+    } catch (err) {
+      const message = err.message || String(err);
+      if (!message.includes("userScripts") && !message.includes("User Scripts")) {
+        return { tabId: tab.id, result: null, error: message, resultType: "error" };
+      }
+    }
   }
 
   try {
-    const [injection] = await chrome.userScripts.execute({
+    const [injection] = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      world: "USER_SCRIPT",
-      js: [{ code }],
+      world: "MAIN",
+      func: (source) => {
+        return (0, eval)(source);
+      },
+      args: [code],
     });
-
-    if (injection.error) {
-      return { tabId: tab.id, result: null, error: injection.error, resultType: "error" };
-    }
-
-    const value = injection.result;
-    const resultType = typeof value;
-    let result;
-    if (value === null || value === undefined) result = String(value);
-    else if (resultType === "object") {
-      try { result = JSON.stringify(value); } catch { result = String(value); }
-    } else result = String(value);
-
-    return { tabId: tab.id, result, resultType };
+    return { tabId: tab.id, ...serializeScriptValue(injection?.result), executionWorld: "MAIN" };
   } catch (err) {
     return {
       tabId: tab.id,

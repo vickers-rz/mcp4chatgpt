@@ -27,7 +27,7 @@ def post_json(url: str, payload: dict, token: str | None = None) -> dict:
         return json.loads(resp.read().decode("utf-8") or "{}")
 
 
-def post_raw_json(url: str, payload: object, token: str | None = None, host: str | None = None) -> tuple[int, dict]:
+def post_raw_json(url: str, payload: object, token: str | None = None, host: str | None = None) -> tuple[int, object]:
     data = json.dumps(payload).encode("utf-8")
     headers = {"Content-Type": "application/json"}
     if token:
@@ -66,7 +66,7 @@ def post_raw_response(
             exc.close()
 
 
-def get_json(url: str, host: str | None = None) -> tuple[int, dict]:
+def get_json(url: str, host: str | None = None) -> tuple[int, object]:
     headers = {}
     if host:
         headers["Host"] = host
@@ -314,9 +314,17 @@ class ServerTests(unittest.TestCase):
                     "results": [{"title": "Example", "url": "https://example.test", "link": "https://example.test", "snippet": "Snippet"}],
                     "raw": {},
                 }) as combined:
-                    status, payload = get_json(f"http://{host}:{port}/search?q=test&engine=brave&count=2")
+                    status, payload = post_raw_json(
+                        f"http://{host}:{port}/search?engine=brave",
+                        {"query": "test", "count": 2},
+                    )
                 self.assertEqual(status, 200)
-                self.assertEqual(payload["results"][0]["title"], "Example")
+                self.assertIsInstance(payload, list)
+                self.assertEqual(payload[0], {
+                    "link": "https://example.test",
+                    "title": "Example",
+                    "snippet": "Snippet",
+                })
                 combined.assert_called_once_with(
                     config,
                     "test",
@@ -325,6 +333,27 @@ class ServerTests(unittest.TestCase):
                     fetch_content=False,
                     fetch_limit=3,
                 )
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_open_webui_search_rejects_public_host_before_provider_call(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), allowed_hosts=["127.0.0.1", "public.example"])
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                with mock.patch("mcp4chatgpt.server.web_ops.combined_search") as combined:
+                    status, payload = post_raw_json(
+                        f"http://{host}:{port}/search",
+                        {"query": "test", "count": 2},
+                        host="public.example",
+                    )
+                self.assertEqual(status, 403)
+                self.assertEqual(payload["error"], "local_search_only")
+                combined.assert_not_called()
             finally:
                 server.shutdown()
                 server.server_close()

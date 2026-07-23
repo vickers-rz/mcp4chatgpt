@@ -127,7 +127,7 @@ def _truthy(value: Any) -> bool:
     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _open_webui_search(config: Config, params: dict[str, Any]) -> dict[str, Any]:
+def _open_webui_search(config: Config, params: dict[str, Any]) -> list[dict[str, str]]:
     query = str(params.get("q") or params.get("query") or "").strip()
     if not query:
         raise ValueError("Missing search query. Use q or query.")
@@ -143,11 +143,14 @@ def _open_webui_search(config: Config, params: dict[str, Any]) -> dict[str, Any]
         fetch_content=fetch_content,
         fetch_limit=fetch_limit,
     )
-    return {
-        "query": query,
-        "engine": result["engine"],
-        "results": result["results"],
-    }
+    return [
+        {
+            "link": str(item.get("link") or item.get("url") or ""),
+            "title": str(item.get("title") or ""),
+            "snippet": str(item.get("markdown") or item.get("snippet") or item.get("content") or ""),
+        }
+        for item in result["results"]
+    ]
 
 
 def _make_error(code: int, message: str, request_id: Any = None) -> dict[str, Any]:
@@ -205,6 +208,9 @@ class Handler(BaseHTTPRequestHandler):
             _html_response(self, 200, render_authorize_form(params))
             return
         if parsed.path == "/search":
+            if not _is_local_request(self):
+                _json_response(self, 403, {"error": "local_search_only"})
+                return
             params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
             try:
                 _json_response(self, 200, _open_webui_search(self.server.config, params))
@@ -254,7 +260,11 @@ class Handler(BaseHTTPRequestHandler):
                 self._handle_mcp()
                 return
             if parsed.path == "/search":
-                payload = _read_json(self)
+                if not _is_local_request(self):
+                    _json_response(self, 403, {"error": "local_search_only"})
+                    return
+                query_params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
+                payload = {**query_params, **_read_json(self)}
                 try:
                     _json_response(self, 200, _open_webui_search(self.server.config, payload))
                 except ValueError as exc:

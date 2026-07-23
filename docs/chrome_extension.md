@@ -107,7 +107,7 @@ ext_connection_status
 | `ext_navigate` | 打开 URL（当前 tab 或新 tab） |
 | `ext_click_element` | 点击页面元素（by CSS selector） |
 | `ext_fill_input` | 填写表单输入框 |
-| `ext_run_js` | 执行 JavaScript（需在扩展 popup 和 Chrome 扩展详情页中授权） |
+| `ext_run_js` | 优先通过 User Scripts 隔离环境执行 JavaScript（需在扩展 popup 和 Chrome 扩展详情页中授权） |
 | `ext_listen_changes` | 监听页面导航和 DOM 变化（最长 120 秒） |
 
 ---
@@ -120,6 +120,38 @@ ext_connection_status
 | 截图 | 默认开启，只读 |
 | 导航 & 交互 | 默认开启，可点击/填表 |
 | **JS 执行** | **默认关闭**，需在 popup 中开启，并在 Chrome 扩展详情页开启「Allow User Scripts」 |
+
+`ext_run_js` 默认调用 Chrome 135+ 的 `chrome.userScripts.execute`，并在
+`USER_SCRIPT` world 中执行，不受目标网页 CSP 限制。只有 User Scripts API
+不可用时，才会回退到 `chrome.scripting.executeScript` 的 MAIN world。
+
+### User Scripts 兼容性设计决策
+
+本项目当前只需要适配本机的新版 Chrome，且本机已在扩展详情页主动开启
+**Allow User Scripts**。因此，`chrome.userScripts.execute` 需要用户授权是
+预期的 Chrome 安全模型，不是本项目的缺陷，也不应据此把 MAIN world 调整为
+首选执行路径。
+
+执行顺序必须保持为：
+
+1. 优先使用 `chrome.userScripts.execute` 和 `USER_SCRIPT` world。
+2. 仅当 User Scripts API 未提供或权限不可用时，回退到
+   `chrome.scripting.executeScript` 和 MAIN world。
+
+`ext_run_js` 的 MCP 结果包含 `execution_world`，正常配置下应为
+`USER_SCRIPT`；该字段可用于测试和故障排查。
+
+这样选择是因为 User Scripts API 就是 Chrome 为运行用户提供的任意脚本设计的
+接口；`USER_SCRIPT` world 与网页环境隔离并免受目标网页 CSP 限制。MAIN world
+会与目标网页共享 JavaScript 环境、受网页 CSP 约束，也可能被网页代码干预，因此
+只适合作为兼容性降级。Chrome 138 及以上版本使用每个扩展独立的
+**Allow User Scripts** 开关；较旧版本使用全局 Developer mode。
+
+官方依据：
+
+- [chrome.userScripts API](https://developer.chrome.com/docs/extensions/reference/api/userScripts)
+- [Chrome 138 User Scripts 授权变更](https://developer.chrome.com/blog/chrome-userscript)
+- [chrome.scripting API](https://developer.chrome.com/docs/extensions/reference/api/scripting)
 
 ---
 
@@ -143,6 +175,7 @@ ext_connection_status
 - 部分特殊页面（`chrome://`、`chrome-extension://`、Chrome Web Store）不允许注入脚本，这是 Chrome 的安全限制，属正常现象
 
 **Q: `ext_run_js` 提示 Chrome User Scripts 不可用**
+- 确认 Chrome 版本为 135 或更高
 - 打开 `chrome://extensions`，进入 MCP4ChatGPT 扩展详情页
 - 开启 **Allow User Scripts**
 - 返回扩展 popup，确认 **Allow JS execution** 也已开启

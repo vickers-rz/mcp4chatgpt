@@ -8,7 +8,7 @@ travels through the local service.
 MCP4ChatGPT is a ChatGPT Web connector backend for three related workflows:
 
 - `local_ops`: operate on this Mac through bounded file, command, Git, and terminal tools.
-- `web_ops`: provide Firecrawl-style web search, scrape, crawl, map, extract, and interaction tools.
+- `web_ops`: use Brave for fast search discovery and Firecrawl for search, scrape, crawl, map, extract, and interaction.
 - `knowledge_ops`: maintain a local NotebookLM-like source library with citations, chunk search, fetch, and learning-material helpers.
 
 The public target URL is:
@@ -36,8 +36,18 @@ MCP4ChatGPT HTTP server on 127.0.0.1:8766
   |
   +-- local_ops: files, commands, Git
   +-- terminal_ops: co-te.py -> Terminal.app / iTerm2 / Termius
-  +-- web_ops: Firecrawl HTTP API
+  +-- web_ops: Brave Search API + Firecrawl HTTP API
   +-- knowledge_ops: local JSON source store
+
+Local Open WebUI
+  |
+  | HTTP without bearer authentication
+  v
+http://127.0.0.1:8766/search
+  |
+  +-- brave: Brave Search API
+  +-- firecrawl: Firecrawl Search API
+  +-- auto: Brave first, Firecrawl fallback
 ```
 
 The service is intentionally a backend. ChatGPT remains the conversational UI,
@@ -67,6 +77,9 @@ reasoning layer, and answer composer.
 - `GET /mcp`: authenticated Streamable HTTP probe endpoint. Returns `405
   Method Not Allowed` with `Allow: POST` because this server does not expose a
   server-to-client SSE stream.
+- `GET|POST /search`: Open WebUI External Search endpoint. It accepts only
+  loopback clients using a localhost Host header and is unavailable through the
+  public Cloudflare hostname.
 
 Supported MCP methods:
 
@@ -86,7 +99,7 @@ Tool names are prefixed by capability:
 
 - `local_*`: local file, command, Git, and patch tools.
 - `terminal_*`: macOS terminal/app interaction tools.
-- `web_*`: Firecrawl-backed web tools.
+- `web_*`: Brave search plus Firecrawl-backed search and page-processing tools.
 - `knowledge_*`: local source-library tools.
 - `server_info`: backend status and configuration summary.
 
@@ -131,11 +144,12 @@ Accessibility permissions still apply to the Python process running this server.
 
 ## Web Ops
 
-`web_ops.py` is a thin Firecrawl adapter. It does not implement a crawler or
-browser cluster locally.
+`web_ops.py` is a thin Brave and Firecrawl adapter. It does not implement a
+search index, crawler, or browser cluster locally.
 
-Tools map to Firecrawl-style endpoints:
+Search and page-processing operations map to these provider endpoints:
 
+- Brave discovery -> `/res/v1/web/search`
 - `web_search` -> `/v2/search`
 - `web_scrape` -> `/v2/scrape`
 - `web_crawl` -> `/v2/crawl`
@@ -144,8 +158,14 @@ Tools map to Firecrawl-style endpoints:
 - `web_interact` -> scrape plus interact on the returned scrape/session id when available
 - `web_add_to_knowledge` -> scrape a page and ingest markdown into the knowledge store
 
-If `FIRECRAWL_API_KEY` is not configured, web tools remain listed but fail with
-`web_ops_not_configured`. This keeps the schema stable while making missing
+The local `/search` route returns Open WebUI's array contract with `link`,
+`title`, and `snippet`. Its `auto` mode tries Brave first and falls back to
+Firecrawl when Brave is unavailable or returns no web results. Optional page
+fetches use Firecrawl; a single fetch failure is attached to that result and
+does not discard the remaining search results.
+
+If a required provider key is not configured, provider-backed operations fail
+with `web_ops_not_configured`. This keeps the schema stable while making missing
 configuration explicit.
 
 ## Knowledge Ops
@@ -261,7 +281,8 @@ Security impact:
 - Unknown `Host` headers are rejected before route handling; keep
   `MCP_ALLOWED_HOSTS` limited to trusted public/reverse-proxy names.
 - `MCP_ALLOWED_ROOTS` should remain narrow.
-- Firecrawl keys and OAuth client data live under the configured project data directory.
+- Brave and Firecrawl keys are loaded from the local environment; OAuth client
+  data lives under the configured project data directory.
 - Terminal tools may trigger macOS Automation/Accessibility prompts and should not be enabled casually as an always-on service.
 
 ## Current Limits

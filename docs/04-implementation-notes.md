@@ -8,7 +8,10 @@ This implementation is a first full-ops backend for ChatGPT Web, not a paste-onl
 - OAuth discovery, protected resource metadata, dynamic registration, authorize, and token endpoints.
 - Local file, command, Git, and exact-text patch tools.
 - Terminal tools that load `/Users/vickers/Documents/MCP_Creator/codex_work_with_apps/co-te.py`.
-- Firecrawl-style web tools with explicit `web_ops_not_configured` errors when no API key is set.
+- Brave search discovery plus Firecrawl search and page-processing tools, with
+  explicit `web_ops_not_configured` errors when a required API key is absent.
+- A localhost-only Open WebUI External Search endpoint at `/search`, including
+  Brave-to-Firecrawl automatic fallback.
 - Local NotebookLM-like knowledge store with source add/list/search/fetch and learning material generation.
 - Unit and HTTP integration tests.
 
