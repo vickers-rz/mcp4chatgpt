@@ -167,6 +167,21 @@ function serializeScriptValue(value) {
   return { result, resultType };
 }
 
+function wrapUserScriptCode(code) {
+  return [
+    "try {",
+    code,
+    "} catch (error) {",
+    "  ({",
+    "    __mcp4chatgptUserScriptError: true,",
+    "    name: error?.name || 'Error',",
+    "    message: error?.message || String(error),",
+    "    stack: error?.stack || ''",
+    "  });",
+    "}",
+  ].join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Icon state
 // ---------------------------------------------------------------------------
@@ -449,17 +464,40 @@ async function cmdFillInput({ selector, value, tabId, submit = false }) {
               cancelable: true,
             }));
           }
-          return { filled, submitted: true, tagName: el.tagName, submitMethod: "enter_key" };
+          return {
+            filled,
+            submitted: false,
+            submitAttempted: true,
+            submissionStatus: "attempted",
+            submitMethod: "synthetic_enter",
+            tagName: el.tagName,
+          };
         }
 
         try {
-          if (typeof form.requestSubmit === "function") form.requestSubmit();
-          else HTMLFormElement.prototype.submit.call(form);
+          let submitMethod;
+          if (typeof form.requestSubmit === "function") {
+            form.requestSubmit();
+            submitMethod = "request_submit";
+          } else {
+            HTMLFormElement.prototype.submit.call(form);
+            submitMethod = "native_submit";
+          }
           submitted = true;
+          return {
+            filled,
+            submitted,
+            submitAttempted: true,
+            submissionStatus: "submitted",
+            submitMethod,
+            tagName: el.tagName,
+          };
         } catch (err) {
           return {
             filled,
             submitted: false,
+            submitAttempted: true,
+            submissionStatus: "failed",
             tagName: el.tagName,
             error: err.message || String(err),
           };
@@ -486,18 +524,43 @@ async function cmdRunJs({ code, tabId }) {
       const [injection] = await chrome.userScripts.execute({
         target: { tabId: tab.id },
         world: "USER_SCRIPT",
-        js: [{ code }],
+        js: [{ code: wrapUserScriptCode(code) }],
       });
 
       if (injection.error) {
-        return { tabId: tab.id, result: null, error: injection.error, resultType: "error" };
+        return {
+          tabId: tab.id,
+          result: null,
+          error: injection.error,
+          resultType: "error",
+          executionWorld: "USER_SCRIPT",
+        };
       }
 
-      return { tabId: tab.id, ...serializeScriptValue(injection.result), executionWorld: "USER_SCRIPT" };
+      const value = injection.result;
+      if (value && typeof value === "object" && value.__mcp4chatgptUserScriptError === true) {
+        const error = `${value.name}: ${value.message}`;
+        return {
+          tabId: tab.id,
+          result: null,
+          error,
+          errorStack: value.stack || undefined,
+          resultType: "error",
+          executionWorld: "USER_SCRIPT",
+        };
+      }
+
+      return { tabId: tab.id, ...serializeScriptValue(value), executionWorld: "USER_SCRIPT" };
     } catch (err) {
       const message = err.message || String(err);
       if (!message.includes("userScripts") && !message.includes("User Scripts")) {
-        return { tabId: tab.id, result: null, error: message, resultType: "error" };
+        return {
+          tabId: tab.id,
+          result: null,
+          error: message,
+          resultType: "error",
+          executionWorld: "USER_SCRIPT",
+        };
       }
     }
   }
@@ -518,6 +581,7 @@ async function cmdRunJs({ code, tabId }) {
       result: null,
       error: err.message || String(err),
       resultType: "error",
+      executionWorld: "MAIN",
     };
   }
 }

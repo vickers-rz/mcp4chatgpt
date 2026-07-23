@@ -264,7 +264,7 @@ class Handler(BaseHTTPRequestHandler):
                     _json_response(self, 403, {"error": "local_search_only"})
                     return
                 query_params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
-                payload = {**query_params, **_read_json(self)}
+                payload = {**_read_json(self), **query_params}
                 try:
                     _json_response(self, 200, _open_webui_search(self.server.config, payload))
                 except ValueError as exc:

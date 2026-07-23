@@ -300,6 +300,9 @@ def ext_fill_input(
         "selector": selector,
         "filled": result.get("filled", False),
         "submitted": result.get("submitted", False),
+        "submit_attempted": result.get("submitAttempted", False),
+        "submission_status": result.get("submissionStatus"),
+        "submit_method": result.get("submitMethod"),
         "element_tag": result.get("tagName"),
     }
     if error := result.get("error"):
@@ -334,12 +337,15 @@ def ext_run_js(
     result = ext_bridge.send_command("run_js", args, timeout=30)
 
     if error := result.get("error"):
-        return {
+        output = {
             "tab_id": result.get("tabId"),
             "error": str(error),
             "result": None,
             "execution_world": result.get("executionWorld"),
         }
+        if error_stack := result.get("errorStack"):
+            output["error_stack"] = str(error_stack)
+        return output
 
     raw_result = result.get("result")
     result_str = (

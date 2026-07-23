@@ -316,7 +316,7 @@ class ServerTests(unittest.TestCase):
                 }) as combined:
                     status, payload = post_raw_json(
                         f"http://{host}:{port}/search?engine=brave",
-                        {"query": "test", "count": 2},
+                        {"query": "test", "count": 2, "engine": "firecrawl"},
                     )
                 self.assertEqual(status, 200)
                 self.assertIsInstance(payload, list)

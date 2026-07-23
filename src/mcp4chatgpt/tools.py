@@ -523,7 +523,7 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "ext_fill_input",
-            "Fill an input or textarea by CSS selector and optionally submit its form. Pass the same tab_id returned by ext_navigate so the operation cannot drift to another active tab. Returns a diagnostic error when filling or submission fails. Requires the MCP4ChatGPT Chrome extension.",
+            "Fill an input or textarea by CSS selector and optionally submit its form. Pass the same tab_id returned by ext_navigate so the operation cannot drift to another active tab. A synthetic Enter event on elements without a form is reported as attempted, not confirmed submitted. Requires the MCP4ChatGPT Chrome extension.",
             _schema({
                 "selector": {"type": "string"},
                 "value": {"type": "string"},

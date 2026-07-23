@@ -110,6 +110,11 @@ ext_connection_status
 | `ext_run_js` | 优先通过 User Scripts 隔离环境执行 JavaScript（需在扩展 popup 和 Chrome 扩展详情页中授权） |
 | `ext_listen_changes` | 监听页面导航和 DOM 变化（最长 120 秒） |
 
+当 `ext_fill_input` 请求提交但目标元素不属于 `<form>` 时，扩展会向页面派发
+合成 Enter 事件。该事件是否被 SPA 处理无法通用确认，因此结果使用
+`submit_attempted: true`、`submission_status: "attempted"` 和
+`submitted: false`，不会把“已尝试”误报为“已提交”。
+
 ---
 
 ## 权限说明
@@ -139,7 +144,9 @@ ext_connection_status
    `chrome.scripting.executeScript` 和 MAIN world。
 
 `ext_run_js` 的 MCP 结果包含 `execution_world`，正常配置下应为
-`USER_SCRIPT`；该字段可用于测试和故障排查。
+`USER_SCRIPT`；该字段可用于测试和故障排查。USER_SCRIPT 源码使用不依赖
+`eval` 的运行期异常包装，因此脚本抛出的错误也会通过 MCP 返回，而不是静默变成
+`null`。
 
 这样选择是因为 User Scripts API 就是 Chrome 为运行用户提供的任意脚本设计的
 接口；`USER_SCRIPT` world 与网页环境隔离并免受目标网页 CSP 限制。MAIN world

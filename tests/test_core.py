@@ -517,6 +517,34 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(result["element_tag"], "TEXTAREA")
             self.assertEqual(result["error"], "setter failed")
 
+    def test_ext_fill_input_preserves_attempted_submission_status(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabId": 7,
+                "filled": True,
+                "submitted": False,
+                "submitAttempted": True,
+                "submissionStatus": "attempted",
+                "submitMethod": "synthetic_enter",
+                "tagName": "INPUT",
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_fill_input(
+                    config,
+                    "#search",
+                    "AI progress",
+                    tab_id=7,
+                    submit=True,
+                )
+
+            self.assertTrue(result["filled"])
+            self.assertFalse(result["submitted"])
+            self.assertTrue(result["submit_attempted"])
+            self.assertEqual(result["submission_status"], "attempted")
+            self.assertEqual(result["submit_method"], "synthetic_enter")
+
     def test_ext_run_js_preserves_execution_world(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -537,6 +565,26 @@ class CoreTests(unittest.TestCase):
             )
             self.assertEqual(result["result"], "42")
             self.assertEqual(result["type"], "number")
+            self.assertEqual(result["execution_world"], "USER_SCRIPT")
+
+    def test_ext_run_js_preserves_error_world_and_stack(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabId": 7,
+                "result": None,
+                "error": "Error: intentional test",
+                "errorStack": "Error: intentional test\n    at test.js:1:1",
+                "resultType": "error",
+                "executionWorld": "USER_SCRIPT",
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_run_js(config, "throw new Error('intentional test')", tab_id=7)
+
+            self.assertIsNone(result["result"])
+            self.assertEqual(result["error"], "Error: intentional test")
+            self.assertIn("test.js", result["error_stack"])
             self.assertEqual(result["execution_world"], "USER_SCRIPT")
 
     def test_ext_listen_changes_waits_and_unsubscribes(self) -> None:

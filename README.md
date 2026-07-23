@@ -177,9 +177,10 @@ want MCP4ChatGPT to scrape the top results through Firecrawl and include page
 markdown, because that consumes Firecrawl credits. Open WebUI normally uses
 `OPEN_WEBUI_SEARCH_DEFAULT_ENGINE`; to force an engine in its admin settings,
 append `?engine=brave`, `?engine=firecrawl`, or `?engine=auto` to the External
-Search URL. In `auto` mode, Brave is tried first and Firecrawl is used when
-Brave is unavailable or returns no web results. If an optional Firecrawl page
-fetch fails, the original search result is retained without page markdown.
+Search URL. URL parameters take precedence over fields in Open WebUI's JSON
+body. In `auto` mode, Brave is tried first and Firecrawl is used when Brave is
+unavailable or returns no web results. If an optional Firecrawl page fetch
+fails, the original search result is retained without page markdown.
 
 ## Tool Groups
 
