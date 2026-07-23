@@ -125,7 +125,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_fill_input",
         "ext_run_js",
     }
-    open_world = name.startswith("web_") or name in {
+    open_world = name.startswith("web_") or name == "search_web" or name in {
         "local_run_command",
         "app_get_context",
         "app_write_text",
@@ -174,7 +174,8 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
 
 def _ok(result: Any) -> dict[str, Any]:
     text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2)
-    return {"content": [{"type": "text", "text": text}], "structuredContent": result}
+    structured_content = result if isinstance(result, dict) else {"result": result}
+    return {"content": [{"type": "text", "text": text}], "structuredContent": structured_content}
 
 
 def _server_info(config: Config, _args: dict[str, Any]) -> dict[str, Any]:
@@ -196,6 +197,53 @@ def _web_add_to_knowledge(config: Config, args: dict[str, Any]) -> dict[str, Any
     title = data.get("metadata", {}).get("title") or args.get("title") or args["url"]
     added = knowledge_ops.add_source(config, title=title, text=text, url=args["url"], metadata={"web_result": data.get("metadata", {})})
     return {"scrape": scraped, "knowledge": added}
+
+
+def _search_web(config: Config, args: dict[str, Any]) -> dict[str, Any]:
+    deep_read = bool(args.get("deep_read", False))
+    result_count = int(args.get("result_count", 3))
+    response = web_ops.combined_search(
+        config,
+        args["query"],
+        result_count,
+        engine="auto",
+        fetch_content=deep_read,
+        fetch_limit=min(result_count, 2) if deep_read else 0,
+    )
+    compact_results = []
+    for result in response.get("results", []):
+        compact_result = {
+            "title": str(result.get("title", "")),
+            "url": str(result.get("url") or result.get("link") or ""),
+            "snippet": str(result.get("snippet") or result.get("content") or "")[:2000],
+            "source": str(result.get("source", "")),
+        }
+        if deep_read and result.get("markdown"):
+            compact_result["markdown"] = str(result["markdown"])[:8000]
+        if result.get("fetch_error"):
+            compact_result["fetch_error"] = str(result["fetch_error"])[:500]
+        compact_results.append(compact_result)
+
+    compact_response = {
+        "query": response.get("query", args["query"]),
+        "engine": response.get("engine", "auto"),
+        "results": compact_results,
+    }
+    if response.get("fallback_reason"):
+        compact_response["fallback_reason"] = str(response["fallback_reason"])[:500]
+    return compact_response
+
+
+def _web_search_auto_compat(config: Config, args: dict[str, Any]) -> dict[str, Any]:
+    deep_read = bool(args.get("deep_read", False))
+    return web_ops.combined_search(
+        config,
+        args["query"],
+        int(args.get("limit", 3)),
+        engine="auto",
+        fetch_content=deep_read,
+        fetch_limit=int(args.get("fetch_limit", 1 if deep_read else 0)),
+    )
 
 
 def build_tools() -> list[Tool]:
@@ -389,26 +437,28 @@ def build_tools() -> list[Tool]:
             _schema({"text": {"type": "string"}, "press_return": {"type": "boolean", "default": True}, "sensitive": {"type": "boolean", "default": False}, "app": {"type": "string", "enum": CO_TE_TERMINAL_APP_KEYS, "default": "terminal"}, "label": {"type": "string"}}, ["text"]),
             lambda c, a: terminal_ops.send_input(c, a["text"], bool(a.get("press_return", True)), bool(a.get("sensitive", False)), a.get("app", "terminal"), a.get("label")),
         ),
-        Tool("web_search", "Search the web via Firecrawl.", _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]), lambda c, a: web_ops.search(c, a["query"], int(a.get("limit", 5)))),
-        Tool("web_brave_search", "Search the web via Brave Search API.", _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]), lambda c, a: web_ops.brave_search(c, a["query"], int(a.get("limit", 5)))),
         Tool(
-            "web_combined_search",
-            "Search with Brave or Firecrawl, optionally fetching top result pages through Firecrawl.",
-            _schema({
-                "query": {"type": "string"},
-                "limit": {"type": "integer", "default": 5},
-                "engine": {"type": "string", "enum": ["brave", "firecrawl", "auto"], "default": "brave"},
-                "fetch_content": {"type": "boolean", "default": False},
-                "fetch_limit": {"type": "integer", "default": 3},
-            }, ["query"]),
-            lambda c, a: web_ops.combined_search(
-                c,
-                a["query"],
-                int(a.get("limit", 5)),
-                engine=a.get("engine", "brave"),
-                fetch_content=bool(a.get("fetch_content", False)),
-                fetch_limit=int(a.get("fetch_limit", 3)),
+            "search_web",
+            "Search and analyze current web content. Use this single tool whenever the user asks to search online, look up current information, compare web sources, or provide cited web research. It automatically uses Brave first and falls back to Firecrawl. Set deep_read=true only when page-body analysis is necessary.",
+            _schema(
+                {
+                    "query": {"type": "string", "description": "The web search query to run."},
+                    "result_count": {
+                        "type": "integer",
+                        "default": 3,
+                        "minimum": 1,
+                        "maximum": 10,
+                        "description": "Number of search results to return.",
+                    },
+                    "deep_read": {
+                        "type": "boolean",
+                        "default": False,
+                        "description": "Fetch up to two top result pages with Firecrawl for page-body analysis.",
+                    },
+                },
+                ["query"],
             ),
+            _search_web,
         ),
         Tool("web_scrape", "Scrape a web page via Firecrawl.", _schema({"url": {"type": "string"}, "formats": {"type": "array", "items": {"type": "string"}}}, ["url"]), lambda c, a: web_ops.scrape(c, a["url"], a.get("formats"))),
         Tool("web_crawl", "Crawl a website via Firecrawl.", _schema({"url": {"type": "string"}, "limit": {"type": "integer", "default": 10}, "max_depth": {"type": "integer", "default": 2}}, ["url"]), lambda c, a: web_ops.crawl(c, a["url"], int(a.get("limit", 10)), int(a.get("max_depth", 2)))),
@@ -584,13 +634,72 @@ class ToolRegistry:
     def __init__(self, config: Config, audit: AuditLogger):
         self.config = config
         self.audit = audit
-        self.tools = {tool.name: tool for tool in build_tools()}
+        listed_tools = build_tools()
+        self.tools = {tool.name: tool for tool in listed_tools}
+        self.tools.update(
+            {
+                "web_search": Tool(
+                    "web_search",
+                    "Compatibility alias for Firecrawl search.",
+                    _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]),
+                    lambda c, a: web_ops.search(c, a["query"], int(a.get("limit", 5))),
+                ),
+                "web_brave_search": Tool(
+                    "web_brave_search",
+                    "Compatibility alias for Brave search.",
+                    _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]),
+                    lambda c, a: web_ops.brave_search(c, a["query"], int(a.get("limit", 5))),
+                ),
+                "web_search_auto": Tool(
+                    "web_search_auto",
+                    "Compatibility alias for automatic web search.",
+                    _schema(
+                        {
+                            "query": {"type": "string"},
+                            "limit": {"type": "integer", "default": 3},
+                            "deep_read": {"type": "boolean", "default": False},
+                            "fetch_limit": {"type": "integer", "default": 1},
+                        },
+                        ["query"],
+                    ),
+                    _web_search_auto_compat,
+                ),
+                "web_combined_search": Tool(
+                    "web_combined_search",
+                    "Compatibility alias for advanced combined search.",
+                    _schema(
+                        {
+                            "query": {"type": "string"},
+                            "limit": {"type": "integer", "default": 5},
+                            "engine": {
+                                "type": "string",
+                                "enum": ["brave", "firecrawl", "auto"],
+                                "default": "brave",
+                            },
+                            "fetch_content": {"type": "boolean", "default": False},
+                            "fetch_limit": {"type": "integer", "default": 3},
+                        },
+                        ["query"],
+                    ),
+                    lambda c, a: web_ops.combined_search(
+                        c,
+                        a["query"],
+                        int(a.get("limit", 5)),
+                        engine=a.get("engine", "brave"),
+                        fetch_content=bool(a.get("fetch_content", False)),
+                        fetch_limit=int(a.get("fetch_limit", 3)),
+                    ),
+                ),
+            }
+        )
+        self._listed_tool_names = {tool.name for tool in listed_tools}
 
     def list_tools(self) -> dict[str, Any]:
         return {
             "tools": [
                 tool.definition(auth_required=not self.config.local_auth_disabled)
-                for tool in self.tools.values()
+                for name, tool in self.tools.items()
+                if name in self._listed_tool_names
             ]
         }
 

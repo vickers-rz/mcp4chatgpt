@@ -807,9 +807,11 @@ class CoreTests(unittest.TestCase):
             config = make_config(Path(d))
             registry = ToolRegistry(config, AuditLogger(config.audit_log))
             names = {tool["name"] for tool in registry.list_tools()["tools"]}
-            self.assertIn("web_search", names)
-            self.assertIn("web_brave_search", names)
-            self.assertIn("web_combined_search", names)
+            self.assertIn("search_web", names)
+            self.assertNotIn("web_search", names)
+            self.assertNotIn("web_brave_search", names)
+            self.assertNotIn("web_search_auto", names)
+            self.assertNotIn("web_combined_search", names)
             self.assertIn("knowledge_search", names)
             self.assertIn("terminal_get_app_context", names)
             self.assertIn("app_get_context", names)
@@ -832,6 +834,57 @@ class CoreTests(unittest.TestCase):
             self.assertIn("ext_fill_input", names)
             self.assertIn("ext_run_js", names)
             self.assertIn("ext_listen_changes", names)
+
+    def test_legacy_web_search_names_remain_callable(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            registry = ToolRegistry(config, AuditLogger(config.audit_log))
+            for name in ("web_search", "web_brave_search", "web_search_auto", "web_combined_search"):
+                self.assertIn(name, registry.tools)
+
+    def test_search_web_returns_compact_model_facing_results(self) -> None:
+        from mcp4chatgpt.tools import _search_web
+
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            with mock.patch(
+                "mcp4chatgpt.tools.web_ops.combined_search",
+                return_value={
+                    "query": "test",
+                    "engine": "brave",
+                    "raw": {"large": "x" * 50000},
+                    "results": [
+                        {
+                            "title": "Example",
+                            "url": "https://example.test",
+                            "snippet": "s" * 3000,
+                            "content": "duplicate",
+                            "source": "brave",
+                            "markdown": "m" * 12000,
+                        }
+                    ],
+                },
+            ):
+                result = _search_web(
+                    config,
+                    {"query": "test", "result_count": 1, "deep_read": True},
+                )
+
+            self.assertNotIn("raw", result)
+            self.assertNotIn("content", result["results"][0])
+            self.assertEqual(len(result["results"][0]["snippet"]), 2000)
+            self.assertEqual(len(result["results"][0]["markdown"]), 8000)
+
+    def test_tool_result_wraps_non_object_structured_content(self) -> None:
+        from mcp4chatgpt.tools import _ok
+
+        string_result = _ok("written")
+        list_result = _ok(["one", "two"])
+        dict_result = _ok({"status": "ok"})
+
+        self.assertEqual(string_result["structuredContent"], {"result": "written"})
+        self.assertEqual(list_result["structuredContent"], {"result": ["one", "two"]})
+        self.assertEqual(dict_result["structuredContent"], {"status": "ok"})
 
     def test_ext_tool_annotations_match_read_and_write_semantics(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -922,7 +975,7 @@ class CoreTests(unittest.TestCase):
                 result = registry.call_tool("apple_notes_inspect_store", {})
 
             self.assertEqual(result["content"][0]["text"], "Apple Notes count: 263")
-            self.assertEqual(result["structuredContent"], "Apple Notes count: 263")
+            self.assertEqual(result["structuredContent"], {"result": "Apple Notes count: 263"})
             self.assertNotIn('"content"', result["content"][0]["text"])
 
     def test_audit_log_rotates_and_compresses(self) -> None:
