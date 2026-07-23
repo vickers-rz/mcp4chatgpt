@@ -153,6 +153,26 @@ Do not add this endpoint as an OpenAPI tool server. The `/mcp` route speaks
 JSON-RPC MCP over Streamable HTTP; OpenAPI compatibility would require a
 separate `mcpo` proxy.
 
+Open WebUI can also use MCP4ChatGPT as an External Web Search provider:
+
+- Enable Web Search: `on`
+- Search Engine: `external`
+- External Search URL: `http://127.0.0.1:8766/search`
+
+The `/search` endpoint is separate from `/mcp`. It accepts both GET query
+parameters and JSON POST bodies:
+
+```text
+/search?q=latest OpenAI news&engine=brave
+/search?q=latest OpenAI news&engine=firecrawl
+/search?q=latest OpenAI news&engine=auto&fetch=true
+```
+
+Use `engine=brave` for fast URL discovery through Brave Search. Use
+`engine=firecrawl` to search through Firecrawl. Add `fetch=true` only when you
+want MCP4ChatGPT to scrape the top results through Firecrawl and include page
+markdown, because that consumes Firecrawl credits.
+
 ## Tool Groups
 
 - `local_*`: allowed-root file access, safe command execution, read-only Git, exact-text patching
@@ -161,10 +181,12 @@ separate `mcpo` proxy.
 - `apple_notes_*`: read-only Apple Notes SQLite inspection, listing, reading, and search through co-te
 - `chrome_*` / `browser_*`: lightweight Google Chrome fallback via local AppleScript; no extension required
 - `ext_*`: enhanced Chrome tab context and interaction through the optional unpacked Chrome extension
-- `web_*`: Firecrawl-backed search, scrape, crawl, map, extract, interact, and add-to-knowledge
+- `web_*`: Brave search plus Firecrawl-backed search, scrape, crawl, map, extract, interact, and add-to-knowledge
 - `knowledge_*`: local source library, chunk search, source fetch, summary, study guide, quiz, flashcards
 
-`web_*` tools require `FIRECRAWL_API_KEY`. If it is missing, the tools remain visible but return `web_ops_not_configured`.
+Firecrawl-backed tools require `FIRECRAWL_API_KEY`; Brave search requires
+`BRAVE_SEARCH_API_KEY`. If the relevant key is missing, the tools remain visible
+but return `web_ops_not_configured`.
 
 ## Chrome Context
 
@@ -209,7 +231,9 @@ PY
 By default screenshots are saved under `data/screenshots/` and MCP returns the
 file path instead of embedding the full image payload. `ext_run_js` remains
 disabled until you explicitly enable "Allow JS execution" in the extension
-popup.
+popup. On Chrome 138 and newer, also open the extension's details page and
+enable Chrome's "Allow User Scripts" setting. The tool runs in Chrome's isolated
+User Scripts world so target-page CSP does not require `unsafe-eval`.
 
 ## Command Execution Modes
 

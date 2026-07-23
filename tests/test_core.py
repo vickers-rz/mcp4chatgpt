@@ -22,6 +22,20 @@ from mcp4chatgpt.safety import resolve_allowed_path, validate_command
 from mcp4chatgpt.tools import ToolRegistry
 
 
+class FakeHTTPResponse:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+    def read(self) -> bytes:
+        return json.dumps(self.payload).encode("utf-8")
+
+
 def make_config(tmp: Path) -> Config:
     root = tmp / "root"
     root.mkdir()
@@ -36,6 +50,9 @@ def make_config(tmp: Path) -> Config:
         audit_log=tmp / "logs" / "audit.jsonl",
         firecrawl_api_key="",
         firecrawl_base_url="https://api.firecrawl.dev",
+        brave_api_key="",
+        brave_base_url="https://api.search.brave.com/res/v1",
+        open_webui_search_default_engine="brave",
         knowledge_roots=[root],
         knowledge_store_dir=tmp / "knowledge",
         tls_cert_path="",
@@ -44,6 +61,7 @@ def make_config(tmp: Path) -> Config:
         log_rotate_bytes=20 * 1024 * 1024,
         log_retention_days=30,
         allowed_hosts=["localhost", "127.0.0.1", "::1"],
+        local_auth_disabled=False,
         ext_bridge_port=8765,
         ext_screenshot_dir=tmp / "screenshots",
     )
@@ -241,6 +259,63 @@ class CoreTests(unittest.TestCase):
             with self.assertRaises(web_ops.WebOpsNotConfigured):
                 web_ops.search(config, "test")
 
+    def test_brave_search_uses_subscription_header(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), brave_api_key="brave-key")
+            payload = {"web": {"results": [{"title": "Example", "url": "https://example.test", "description": "Snippet"}]}}
+
+            def fake_urlopen(req, timeout):
+                self.assertEqual(timeout, 30)
+                self.assertIn("/web/search?", req.full_url)
+                self.assertIn("q=test", req.full_url)
+                self.assertEqual(req.headers["X-subscription-token"], "brave-key")
+                return FakeHTTPResponse(payload)
+
+            with mock.patch("urllib.request.urlopen", fake_urlopen):
+                result = web_ops.brave_search(config, "test", limit=3)
+            self.assertEqual(result, payload)
+
+    def test_combined_search_can_fetch_brave_results_with_firecrawl(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), brave_api_key="brave-key", firecrawl_api_key="fc-key")
+            calls = []
+
+            def fake_urlopen(req, timeout):
+                calls.append((req.get_method(), req.full_url))
+                if req.get_method() == "GET":
+                    return FakeHTTPResponse({
+                        "web": {
+                            "results": [
+                                {"title": "Example", "url": "https://example.test", "description": "Snippet"},
+                            ]
+                        }
+                    })
+                return FakeHTTPResponse({"data": {"markdown": "# Example\nBody"}})
+
+            with mock.patch("urllib.request.urlopen", fake_urlopen):
+                result = web_ops.combined_search(config, "test", engine="brave", fetch_content=True)
+
+            self.assertEqual(result["results"][0]["source"], "brave")
+            self.assertEqual(result["results"][0]["markdown"], "# Example\nBody")
+            self.assertEqual([method for method, _ in calls], ["GET", "POST"])
+
+    def test_combined_search_auto_falls_back_when_brave_has_no_results(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), brave_api_key="brave-key", firecrawl_api_key="fc-key")
+            responses = [
+                {"type": "search", "query": {"original": "test"}},
+                {"data": [{"title": "Fallback", "url": "https://example.test", "description": "Found"}]},
+            ]
+
+            with mock.patch(
+                "urllib.request.urlopen",
+                side_effect=[FakeHTTPResponse(payload) for payload in responses],
+            ):
+                result = web_ops.combined_search(config, "test", engine="auto")
+
+            self.assertEqual(result["engine"], "firecrawl")
+            self.assertEqual(result["results"][0]["source"], "firecrawl")
+
     def test_chrome_tools_are_listed_as_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             registry = ToolRegistry(make_config(Path(d)), AuditLogger(Path(d) / "audit.jsonl"))
@@ -314,6 +389,39 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(saved.read_bytes(), png_bytes)
             self.assertEqual(saved.parent, config.ext_screenshot_dir)
             self.assertNotIn("data_base64", result)
+
+    def test_ext_fill_input_preserves_tab_target_and_diagnostics(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabId": 7,
+                "filled": False,
+                "submitted": False,
+                "tagName": "TEXTAREA",
+                "error": "setter failed",
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_fill_input(
+                    config,
+                    "#search",
+                    "AI progress",
+                    tab_id=7,
+                    submit=True,
+                )
+
+            send.assert_called_once_with(
+                "fill_input",
+                {
+                    "selector": "#search",
+                    "value": "AI progress",
+                    "submit": True,
+                    "tabId": 7,
+                },
+                timeout=15,
+            )
+            self.assertEqual(result["element_tag"], "TEXTAREA")
+            self.assertEqual(result["error"], "setter failed")
 
     def test_ext_listen_changes_waits_and_unsubscribes(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -528,6 +636,7 @@ class CoreTests(unittest.TestCase):
         # Env-var prefixed forms (Pattern B) must be redacted
         self.assertIn("[REDACTED]", redact("MCP_AUTH_SECRET=foobar"))
         self.assertIn("[REDACTED]", redact("FIRECRAWL_API_KEY=fc-abc123xyz"))
+        self.assertIn("[REDACTED]", redact("BRAVE_SEARCH_API_KEY=BSAabc123xyz"))
 
     def test_tool_schema_contains_expected_tools(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -535,6 +644,8 @@ class CoreTests(unittest.TestCase):
             registry = ToolRegistry(config, AuditLogger(config.audit_log))
             names = {tool["name"] for tool in registry.list_tools()["tools"]}
             self.assertIn("web_search", names)
+            self.assertIn("web_brave_search", names)
+            self.assertIn("web_combined_search", names)
             self.assertIn("knowledge_search", names)
             self.assertIn("terminal_get_app_context", names)
             self.assertIn("app_get_context", names)
@@ -584,6 +695,8 @@ class CoreTests(unittest.TestCase):
             self.assertIn("press_return=false", tools["terminal_send_input"]["description"])
             self.assertIn("any co-te supported macOS app", tools["app_get_context"]["description"])
             self.assertIn("Accessibility", tools["app_write_text"]["description"])
+            self.assertIn("reuse the returned tab_id", tools["ext_navigate"]["description"])
+            self.assertIn("same tab_id", tools["ext_fill_input"]["description"])
 
     def test_co_te_app_schemas_expose_non_terminal_apps(self) -> None:
         with tempfile.TemporaryDirectory() as d:

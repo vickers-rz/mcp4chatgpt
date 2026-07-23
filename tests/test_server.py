@@ -9,6 +9,7 @@ import urllib.error
 import urllib.request
 from dataclasses import replace
 from pathlib import Path
+from unittest import mock
 
 from mcp4chatgpt.oauth import issue_token
 from mcp4chatgpt.server import create_server
@@ -124,6 +125,37 @@ class ServerTests(unittest.TestCase):
                 names = {tool["name"] for tool in tools["result"]["tools"]}
                 self.assertIn("knowledge_search", names)
                 self.assertIn("web_scrape", names)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_local_auth_bypass_when_enabled(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), local_auth_disabled=True)
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                base = f"http://{host}:{port}"
+                init = post_json(base + "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})
+                self.assertEqual(init["result"]["serverInfo"]["name"], "mcp4chatgpt")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_local_auth_bypass_omits_oauth_tool_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), local_auth_disabled=True)
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                tools = post_json(f"http://{host}:{port}/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
+                first_tool = tools["result"]["tools"][0]
+                self.assertNotIn("securitySchemes", first_tool)
+                self.assertNotIn("securitySchemes", first_tool["_meta"])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -264,6 +296,35 @@ class ServerTests(unittest.TestCase):
                 status, payload = get_json(f"http://{host}:{port}/health", host="example.test")
                 self.assertEqual(status, 200)
                 self.assertTrue(payload["ok"])
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_open_webui_search_endpoint_returns_results(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                with mock.patch("mcp4chatgpt.server.web_ops.combined_search", return_value={
+                    "query": "test",
+                    "engine": "brave",
+                    "results": [{"title": "Example", "url": "https://example.test", "link": "https://example.test", "snippet": "Snippet"}],
+                    "raw": {},
+                }) as combined:
+                    status, payload = get_json(f"http://{host}:{port}/search?q=test&engine=brave&count=2")
+                self.assertEqual(status, 200)
+                self.assertEqual(payload["results"][0]["title"], "Example")
+                combined.assert_called_once_with(
+                    config,
+                    "test",
+                    2,
+                    engine="brave",
+                    fetch_content=False,
+                    fetch_limit=3,
+                )
             finally:
                 server.shutdown()
                 server.server_close()

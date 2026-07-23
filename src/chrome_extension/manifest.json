@@ -2,12 +2,13 @@
   "manifest_version": 3,
   "name": "MCP4ChatGPT Browser Bridge",
   "short_name": "MCP4ChatGPT",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Connects Chrome to your local MCP4ChatGPT server, letting ChatGPT read tabs, capture screenshots, navigate pages, and more — while keeping your login sessions intact.",
   "permissions": [
     "tabs",
     "activeTab",
     "scripting",
+    "userScripts",
     "storage",
     "alarms"
   ],

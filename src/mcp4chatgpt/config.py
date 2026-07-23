@@ -55,6 +55,9 @@ class Config:
     audit_log: Path
     firecrawl_api_key: str
     firecrawl_base_url: str
+    brave_api_key: str
+    brave_base_url: str
+    open_webui_search_default_engine: str
     knowledge_roots: list[Path]
     knowledge_store_dir: Path
     tls_cert_path: str
@@ -63,6 +66,7 @@ class Config:
     log_rotate_bytes: int
     log_retention_days: int
     allowed_hosts: list[str]
+    local_auth_disabled: bool
     ext_bridge_port: int
     ext_screenshot_dir: Path
 
@@ -115,6 +119,9 @@ def load_config() -> Config:
         audit_log=audit_log,
         firecrawl_api_key=os.environ.get("FIRECRAWL_API_KEY", ""),
         firecrawl_base_url=os.environ.get("FIRECRAWL_BASE_URL", "https://api.firecrawl.dev").rstrip("/"),
+        brave_api_key=os.environ.get("BRAVE_SEARCH_API_KEY", ""),
+        brave_base_url=os.environ.get("BRAVE_SEARCH_BASE_URL", "https://api.search.brave.com/res/v1").rstrip("/"),
+        open_webui_search_default_engine=os.environ.get("OPEN_WEBUI_SEARCH_DEFAULT_ENGINE", "brave").strip().lower(),
         knowledge_roots=_split_paths(os.environ.get("KNOWLEDGE_ROOTS", str(Path.home() / "Documents"))),
         knowledge_store_dir=knowledge_store,
         tls_cert_path=os.environ.get("TLS_CERT_PATH", ""),
@@ -123,6 +130,7 @@ def load_config() -> Config:
         log_rotate_bytes=int(os.environ.get("MCP_LOG_ROTATE_BYTES", str(20 * 1024 * 1024))),
         log_retention_days=int(os.environ.get("MCP_LOG_RETENTION_DAYS", "30")),
         allowed_hosts=allowed_hosts,
+        local_auth_disabled=os.environ.get("MCP_LOCAL_AUTH_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"},
         ext_bridge_port=int(os.environ.get("EXT_BRIDGE_PORT", "8765")),
         ext_screenshot_dir=ext_screenshot_dir,
     )

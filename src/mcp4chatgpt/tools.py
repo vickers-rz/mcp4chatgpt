@@ -73,25 +73,27 @@ class Tool:
     input_schema: dict[str, Any]
     handler: ToolHandler
 
-    def definition(self) -> dict[str, Any]:
+    def definition(self, *, auth_required: bool = True) -> dict[str, Any]:
         security_schemes = [{"type": "oauth2", "scopes": ["local", "web", "knowledge"]}]
         annotations = _annotations_for_tool(self.name)
         title = self.name.replace("_", " ").title()
-        return {
+        definition = {
             "name": self.name,
             "title": title,
             "description": self.description,
             "inputSchema": self.input_schema,
-            "securitySchemes": security_schemes,
             # ChatGPT still reads some descriptor data from _meta for
             # compatibility; keep this mirrored with the public field.
             "_meta": {
-                "securitySchemes": security_schemes,
                 "openai/toolInvocation/invoking": f"Running {title}",
                 "openai/toolInvocation/invoked": f"Finished {title}",
             },
             "annotations": annotations,
         }
+        if auth_required:
+            definition["securitySchemes"] = security_schemes
+            definition["_meta"]["securitySchemes"] = security_schemes
+        return definition
 
 
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
@@ -388,6 +390,26 @@ def build_tools() -> list[Tool]:
             lambda c, a: terminal_ops.send_input(c, a["text"], bool(a.get("press_return", True)), bool(a.get("sensitive", False)), a.get("app", "terminal"), a.get("label")),
         ),
         Tool("web_search", "Search the web via Firecrawl.", _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]), lambda c, a: web_ops.search(c, a["query"], int(a.get("limit", 5)))),
+        Tool("web_brave_search", "Search the web via Brave Search API.", _schema({"query": {"type": "string"}, "limit": {"type": "integer", "default": 5}}, ["query"]), lambda c, a: web_ops.brave_search(c, a["query"], int(a.get("limit", 5)))),
+        Tool(
+            "web_combined_search",
+            "Search with Brave or Firecrawl, optionally fetching top result pages through Firecrawl.",
+            _schema({
+                "query": {"type": "string"},
+                "limit": {"type": "integer", "default": 5},
+                "engine": {"type": "string", "enum": ["brave", "firecrawl", "auto"], "default": "brave"},
+                "fetch_content": {"type": "boolean", "default": False},
+                "fetch_limit": {"type": "integer", "default": 3},
+            }, ["query"]),
+            lambda c, a: web_ops.combined_search(
+                c,
+                a["query"],
+                int(a.get("limit", 5)),
+                engine=a.get("engine", "brave"),
+                fetch_content=bool(a.get("fetch_content", False)),
+                fetch_limit=int(a.get("fetch_limit", 3)),
+            ),
+        ),
         Tool("web_scrape", "Scrape a web page via Firecrawl.", _schema({"url": {"type": "string"}, "formats": {"type": "array", "items": {"type": "string"}}}, ["url"]), lambda c, a: web_ops.scrape(c, a["url"], a.get("formats"))),
         Tool("web_crawl", "Crawl a website via Firecrawl.", _schema({"url": {"type": "string"}, "limit": {"type": "integer", "default": 10}, "max_depth": {"type": "integer", "default": 2}}, ["url"]), lambda c, a: web_ops.crawl(c, a["url"], int(a.get("limit", 10)), int(a.get("max_depth", 2)))),
         Tool("web_map", "Map URLs from a website via Firecrawl.", _schema({"url": {"type": "string"}, "limit": {"type": "integer", "default": 100}}, ["url"]), lambda c, a: web_ops.map_site(c, a["url"], int(a.get("limit", 100)))),
@@ -474,10 +496,13 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "ext_navigate",
-            "Navigate a Chrome tab to a URL, or open a new tab. Requires the MCP4ChatGPT Chrome extension.",
+            "Navigate a Chrome tab to a URL, or open a new tab. When new_tab=true, reuse the returned tab_id in every follow-up browser tool; omitting tab_id targets whichever tab is currently active. Requires the MCP4ChatGPT Chrome extension.",
             _schema({
                 "url": {"type": "string"},
-                "tab_id": {"type": "integer"},
+                "tab_id": {
+                    "type": "integer",
+                    "description": "Target tab ID. For a new tab, use the tab_id returned by this tool in subsequent calls.",
+                },
                 "new_tab": {"type": "boolean", "default": False},
             }, ["url"]),
             lambda c, a: ext_ops.ext_navigate(
@@ -498,11 +523,14 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "ext_fill_input",
-            "Fill a form input or textarea with a value (by CSS selector) in a Chrome tab. Optionally submit the form. Requires the MCP4ChatGPT Chrome extension.",
+            "Fill an input or textarea by CSS selector and optionally submit its form. Pass the same tab_id returned by ext_navigate so the operation cannot drift to another active tab. Returns a diagnostic error when filling or submission fails. Requires the MCP4ChatGPT Chrome extension.",
             _schema({
                 "selector": {"type": "string"},
                 "value": {"type": "string"},
-                "tab_id": {"type": "integer"},
+                "tab_id": {
+                    "type": "integer",
+                    "description": "Exact target tab ID, normally returned by ext_navigate or ext_list_tabs.",
+                },
                 "submit": {"type": "boolean", "default": False},
             }, ["selector", "value"]),
             lambda c, a: ext_ops.ext_fill_input(
@@ -559,7 +587,12 @@ class ToolRegistry:
         self.tools = {tool.name: tool for tool in build_tools()}
 
     def list_tools(self) -> dict[str, Any]:
-        return {"tools": [tool.definition() for tool in self.tools.values()]}
+        return {
+            "tools": [
+                tool.definition(auth_required=not self.config.local_auth_disabled)
+                for tool in self.tools.values()
+            ]
+        }
 
     def call_tool(self, name: str, arguments: dict[str, Any], client_id: str = "") -> dict[str, Any]:
         tool = self.tools.get(name)

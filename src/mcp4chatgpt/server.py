@@ -19,6 +19,7 @@ from .oauth import (
 )
 from .tools import ToolRegistry
 from . import ext_bridge
+from . import web_ops
 
 
 def _json_response(handler: BaseHTTPRequestHandler, status: int, payload: Any) -> None:
@@ -112,8 +113,41 @@ def _host_allowed(handler: BaseHTTPRequestHandler, config: Config) -> bool:
     return host in {_host_without_port(item) for item in config.allowed_hosts}
 
 
+def _is_local_request(handler: BaseHTTPRequestHandler) -> bool:
+    remote = handler.client_address[0]
+    host = _host_without_port(handler.headers.get("Host", ""))
+    return remote in {"127.0.0.1", "::1"} and host in {"127.0.0.1", "localhost", "::1"}
+
+
 def _forbidden_host(handler: BaseHTTPRequestHandler) -> None:
     _json_response(handler, 403, {"error": "forbidden_host"})
+
+
+def _truthy(value: Any) -> bool:
+    return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _open_webui_search(config: Config, params: dict[str, Any]) -> dict[str, Any]:
+    query = str(params.get("q") or params.get("query") or "").strip()
+    if not query:
+        raise ValueError("Missing search query. Use q or query.")
+    limit = int(params.get("limit") or params.get("count") or 5)
+    engine = str(params.get("engine") or config.open_webui_search_default_engine or "brave")
+    fetch_content = _truthy(params.get("fetch") or params.get("fetch_content"))
+    fetch_limit = int(params.get("fetch_limit") or 3)
+    result = web_ops.combined_search(
+        config,
+        query,
+        limit,
+        engine=engine,
+        fetch_content=fetch_content,
+        fetch_limit=fetch_limit,
+    )
+    return {
+        "query": query,
+        "engine": result["engine"],
+        "results": result["results"],
+    }
 
 
 def _make_error(code: int, message: str, request_id: Any = None) -> dict[str, Any]:
@@ -170,6 +204,15 @@ class Handler(BaseHTTPRequestHandler):
             params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
             _html_response(self, 200, render_authorize_form(params))
             return
+        if parsed.path == "/search":
+            params = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
+            try:
+                _json_response(self, 200, _open_webui_search(self.server.config, params))
+            except ValueError as exc:
+                _json_response(self, 400, {"error": "invalid_request", "error_description": str(exc)})
+            except Exception as exc:
+                _json_response(self, 502, {"error": "search_failed", "error_description": str(exc)})
+            return
         if parsed.path == "/mcp":
             try:
                 self._client_id()
@@ -210,6 +253,15 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/mcp":
                 self._handle_mcp()
                 return
+            if parsed.path == "/search":
+                payload = _read_json(self)
+                try:
+                    _json_response(self, 200, _open_webui_search(self.server.config, payload))
+                except ValueError as exc:
+                    _json_response(self, 400, {"error": "invalid_request", "error_description": str(exc)})
+                except Exception as exc:
+                    _json_response(self, 502, {"error": "search_failed", "error_description": str(exc)})
+                return
             _json_response(self, 404, {"error": "not_found"})
         except ValueError as exc:
             # RFC 6749 §5.2: token-endpoint errors use a structured error object.
@@ -219,6 +271,8 @@ class Handler(BaseHTTPRequestHandler):
             _json_response(self, 500, {"error": "server_error", "error_description": "An internal error occurred."})
 
     def _client_id(self) -> str:
+        if self.server.config.local_auth_disabled and _is_local_request(self):
+            return "local-open-webui"
         auth = self.headers.get("Authorization", "")
         if not auth.startswith("Bearer "):
             raise ValueError("Missing Authorization: Bearer token.")

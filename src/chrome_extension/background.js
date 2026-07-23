@@ -398,22 +398,73 @@ async function cmdFillInput({ selector, value, tabId, submit = false }) {
     func: (s, v, doSub) => {
       const el = document.querySelector(s);
       if (!el) return { filled: false, submitted: false, error: `No element: ${s}` };
-      // Set value and dispatch events so React/Vue state updates
-      const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value");
-      if (nativeInputValueSetter && nativeInputValueSetter.set) {
-        nativeInputValueSetter.set.call(el, v);
-      } else {
-        el.value = v;
+
+      if (!("value" in el)) {
+        return {
+          filled: false,
+          submitted: false,
+          tagName: el.tagName,
+          error: `Element does not support a value: ${s}`,
+        };
       }
-      el.dispatchEvent(new Event("input", { bubbles: true }));
-      el.dispatchEvent(new Event("change", { bubbles: true }));
+
+      try {
+        const valuePrototype = el instanceof HTMLTextAreaElement
+          ? HTMLTextAreaElement.prototype
+          : el instanceof HTMLInputElement
+            ? HTMLInputElement.prototype
+            : Object.getPrototypeOf(el);
+        const valueSetter = Object.getOwnPropertyDescriptor(valuePrototype, "value")?.set;
+
+        el.focus();
+        if (valueSetter) valueSetter.call(el, v);
+        else el.value = v;
+
+        const inputEvent = typeof InputEvent === "function"
+          ? new InputEvent("input", {
+              bubbles: true,
+              inputType: "insertText",
+              data: v,
+            })
+          : new Event("input", { bubbles: true });
+        el.dispatchEvent(inputEvent);
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+      } catch (err) {
+        return {
+          filled: false,
+          submitted: false,
+          tagName: el.tagName,
+          error: err.message || String(err),
+        };
+      }
+
+      const filled = String(el.value) === String(v);
       let submitted = false;
-      if (doSub) {
-        const form = el.closest("form");
-        if (form) { form.submit(); submitted = true; }
-        else { el.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); submitted = true; }
+      if (doSub && filled) {
+        const form = el.form || el.closest("form");
+        if (!form) {
+          return {
+            filled,
+            submitted: false,
+            tagName: el.tagName,
+            error: `No form found for element: ${s}`,
+          };
+        }
+
+        try {
+          if (typeof form.requestSubmit === "function") form.requestSubmit();
+          else HTMLFormElement.prototype.submit.call(form);
+          submitted = true;
+        } catch (err) {
+          return {
+            filled,
+            submitted: false,
+            tagName: el.tagName,
+            error: err.message || String(err),
+          };
+        }
       }
-      return { filled: true, submitted };
+      return { filled, submitted, tagName: el.tagName };
     },
     args: [sel, val, doSubmit],
   });
@@ -429,27 +480,43 @@ async function cmdRunJs({ code, tabId }) {
   }
   const tab = await getTargetTab(tabId);
 
-  const userCode = code;
-  const [{ result, error }] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
-    func: (c) => {
-      try {
-        const r = eval(c);  // eslint-disable-line no-eval
-        const type = typeof r;
-        let resultStr;
-        if (r === null || r === undefined) resultStr = String(r);
-        else if (typeof r === "object") { try { resultStr = JSON.stringify(r); } catch { resultStr = String(r); } }
-        else resultStr = String(r);
-        return { result: resultStr, resultType: type };
-      } catch (err) {
-        return { result: null, error: err.message, resultType: "error" };
-      }
-    },
-    args: [userCode],
-  });
+  if (!chrome.userScripts || typeof chrome.userScripts.execute !== "function") {
+    return {
+      tabId: tab.id,
+      result: null,
+      error: "Chrome User Scripts is unavailable. Open this extension's details page and enable 'Allow User Scripts'.",
+      resultType: "error",
+    };
+  }
 
-  if (error) throw new Error(String(error));
-  return { tabId: tab.id, ...(result || {}) };
+  try {
+    const [injection] = await chrome.userScripts.execute({
+      target: { tabId: tab.id },
+      world: "USER_SCRIPT",
+      js: [{ code }],
+    });
+
+    if (injection.error) {
+      return { tabId: tab.id, result: null, error: injection.error, resultType: "error" };
+    }
+
+    const value = injection.result;
+    const resultType = typeof value;
+    let result;
+    if (value === null || value === undefined) result = String(value);
+    else if (resultType === "object") {
+      try { result = JSON.stringify(value); } catch { result = String(value); }
+    } else result = String(value);
+
+    return { tabId: tab.id, result, resultType };
+  } catch (err) {
+    return {
+      tabId: tab.id,
+      result: null,
+      error: err.message || String(err),
+      resultType: "error",
+    };
+  }
 }
 
 /** subscribe_changes: Listen for tab navigation/update events */

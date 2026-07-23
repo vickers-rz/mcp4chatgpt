@@ -107,7 +107,7 @@ ext_connection_status
 | `ext_navigate` | 打开 URL（当前 tab 或新 tab） |
 | `ext_click_element` | 点击页面元素（by CSS selector） |
 | `ext_fill_input` | 填写表单输入框 |
-| `ext_run_js` | 执行 JavaScript（需在扩展 popup 中开启） |
+| `ext_run_js` | 执行 JavaScript（需在扩展 popup 和 Chrome 扩展详情页中授权） |
 | `ext_listen_changes` | 监听页面导航和 DOM 变化（最长 120 秒） |
 
 ---
@@ -119,7 +119,7 @@ ext_connection_status
 | 读取页面内容 | 默认开启，只读 |
 | 截图 | 默认开启，只读 |
 | 导航 & 交互 | 默认开启，可点击/填表 |
-| **JS 执行** | **默认关闭**，需手动在 popup 中开启，有安全风险 |
+| **JS 执行** | **默认关闭**，需在 popup 中开启，并在 Chrome 扩展详情页开启「Allow User Scripts」 |
 
 ---
 
@@ -141,6 +141,11 @@ ext_connection_status
 
 **Q: `chrome.scripting.executeScript` 报错**
 - 部分特殊页面（`chrome://`、`chrome-extension://`、Chrome Web Store）不允许注入脚本，这是 Chrome 的安全限制，属正常现象
+
+**Q: `ext_run_js` 提示 Chrome User Scripts 不可用**
+- 打开 `chrome://extensions`，进入 MCP4ChatGPT 扩展详情页
+- 开启 **Allow User Scripts**
+- 返回扩展 popup，确认 **Allow JS execution** 也已开启
 
 **Q: 截图保存在哪里？**
 - 默认保存在 `data/screenshots/` 目录，文件名格式：`screenshot_<毫秒时间戳>.png`

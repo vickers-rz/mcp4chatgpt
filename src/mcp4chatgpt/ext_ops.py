@@ -295,12 +295,16 @@ def ext_fill_input(
     if tab_id is not None:
         args["tabId"] = tab_id
     result = ext_bridge.send_command("fill_input", args, timeout=15)
-    return {
+    output = {
         "tab_id": result.get("tabId"),
         "selector": selector,
         "filled": result.get("filled", False),
         "submitted": result.get("submitted", False),
+        "element_tag": result.get("tagName"),
     }
+    if error := result.get("error"):
+        output["error"] = str(error)
+    return output
 
 
 # ---------------------------------------------------------------------------
