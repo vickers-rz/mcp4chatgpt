@@ -80,6 +80,13 @@ class CoreTests(unittest.TestCase):
     def test_dangerous_command(self) -> None:
         with self.assertRaises(ValueError):
             validate_command("sudo rm -rf /")
+        with self.assertRaises(ValueError):
+            validate_command("sudo shutdown -h now; printf injected")
+        with self.assertRaises(ValueError):
+            validate_command("echo password | sudo -S shutdown -h now")
+        self.assertEqual(validate_command("sudo shutdown -h now"), "sudo shutdown -h now")
+        self.assertEqual(validate_command("sudo /sbin/shutdown -r now"), "sudo /sbin/shutdown -r now")
+        self.assertEqual(validate_command("sudo reboot"), "sudo reboot")
         self.assertEqual(validate_command("printf hello"), "printf hello")
 
     def test_local_file_and_command(self) -> None:
@@ -962,6 +969,32 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(calls[3], ("read_apple_note_sqlite", {"note_id": "42"}))
             self.assertEqual(calls[4], ("search_apple_notes_sqlite", {"query": "needle", "limit": 4}))
 
+    def test_terminal_run_command_normalizes_multiline_before_co_te(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            calls: list[tuple[str, dict[str, object]]] = []
+
+            class FakeCoTe:
+                def call_tool(self, name: str, arguments: dict[str, object]) -> dict[str, object]:
+                    calls.append((name, arguments))
+                    return {"content": [{"type": "text", "text": "ok"}]}
+
+            with mock.patch.object(terminal_ops, "_load_co_te", return_value=FakeCoTe()):
+                result = terminal_ops.run_command(config, "echo one\n\npwd\r\necho two", app="iterm2", label=" root@sfo2 ")
+
+            self.assertEqual(result, "ok")
+            self.assertEqual(calls[0][0], "run_terminal_command")
+            self.assertEqual(calls[0][1]["command"], "echo one; pwd; echo two")
+            self.assertEqual(calls[0][1]["app"], "iterm2")
+            self.assertEqual(calls[0][1]["label"], "root@sfo2")
+
+    def test_terminal_label_rejects_multiline(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+
+            with self.assertRaises(ValueError):
+                terminal_ops.run_command(config, "pwd", label="title\ninjected")
+
     def test_co_te_tool_registry_response_is_not_double_wrapped(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -977,6 +1010,20 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(result["content"][0]["text"], "Apple Notes count: 263")
             self.assertEqual(result["structuredContent"], {"result": "Apple Notes count: 263"})
             self.assertNotIn('"content"', result["content"][0]["text"])
+
+    def test_prefixed_tool_name_aliases_registered_tools(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+
+            class FakeCoTe:
+                def call_tool(self, name: str, arguments: dict[str, object]) -> dict[str, object]:
+                    return {"content": [{"type": "text", "text": f"{name}:{arguments['command']}"}]}
+
+            with mock.patch.object(terminal_ops, "_load_co_te", return_value=FakeCoTe()):
+                registry = ToolRegistry(config, AuditLogger(config.audit_log))
+                result = registry.call_tool("MCP4ChatGPT.terminal_run_command", {"command": "pwd"})
+
+            self.assertEqual(result["structuredContent"], {"result": "run_terminal_command:pwd"})
 
     def test_audit_log_rotates_and_compresses(self) -> None:
         with tempfile.TemporaryDirectory() as d:

@@ -29,6 +29,14 @@ SECRET_PATTERNS = [
     re.compile(r"(?i)([A-Za-z0-9]+(?:[_-][A-Za-z0-9]+)*[_-](?:password|passwd|api[_-]?key|secret|token)(?:[_-][A-Za-z0-9]+)*)(\s*[:=]\s*)([^\s,;\"\']+)"),
 ]
 
+SAFE_PRIVILEGED_COMMAND_PATTERNS = [
+    # Narrow allowlist for explicit macOS power actions. Keep these exact so
+    # shell chaining, redirection, password piping, and arbitrary sudo usage
+    # remain blocked by the general dangerous-command rules below.
+    re.compile(r"^sudo\s+(?:/sbin/)?shutdown\s+-(?:h|r)\s+now$"),
+    re.compile(r"^sudo\s+(?:/sbin/)?reboot$"),
+]
+
 DANGEROUS_COMMAND_PATTERNS = [
     re.compile(r"(^|[;&|]\s*)sudo\b"),
     re.compile(r"\brm\s+.*-[^\n]*r[^\n]*f"),
@@ -67,6 +75,8 @@ def validate_command(command: str) -> str:
         raise ValueError("Command cannot be empty.")
     if len(command) > 4000:
         raise ValueError("Command is too long.")
+    if any(pattern.fullmatch(command) for pattern in SAFE_PRIVILEGED_COMMAND_PATTERNS):
+        return command
     for pattern in DANGEROUS_COMMAND_PATTERNS:
         if pattern.search(command):
             raise ValueError(f"Refusing potentially dangerous command: {command}")

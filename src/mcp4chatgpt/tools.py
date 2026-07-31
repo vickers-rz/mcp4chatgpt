@@ -367,14 +367,14 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "terminal_get_app_context",
-            "Compatibility alias for app_get_context. Read recent context from any co-te supported macOS app.",
-            _schema({"app": {"type": "string", "enum": CO_TE_APP_KEYS}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string"}}, ["app"]),
+            "Compatibility alias for app_get_context. Read recent context from any co-te supported macOS app. The optional label is a safety check and must be a substring of the actual front-window title; omit it unless that title text is known.",
+            _schema({"app": {"type": "string", "enum": CO_TE_APP_KEYS}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string", "description": "Optional substring of the actual front-window title. Do not use a task description here; omit unless the title is known."}}, ["app"]),
             lambda c, a: terminal_ops.get_app_context(c, a["app"], int(a.get("max_chars", 12000)), bool(a.get("redact_secrets", True)), a.get("label")),
         ),
         Tool(
             "app_get_context",
-            "Read selected text, focused editor content, window context, or terminal history from any co-te supported macOS app.",
-            _schema({"app": {"type": "string", "enum": CO_TE_APP_KEYS}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string"}}, ["app"]),
+            "Read selected text, focused editor content, window context, or terminal history from any co-te supported macOS app. The optional label is a safety check and must be a substring of the actual front-window title; omit it unless that title text is known.",
+            _schema({"app": {"type": "string", "enum": CO_TE_APP_KEYS}, "max_chars": {"type": "integer", "default": 12000}, "redact_secrets": {"type": "boolean", "default": True}, "label": {"type": "string", "description": "Optional substring of the actual front-window title. Do not use a task description here; omit unless the title is known."}}, ["app"]),
             lambda c, a: terminal_ops.get_app_context(c, a["app"], int(a.get("max_chars", 12000)), bool(a.get("redact_secrets", True)), a.get("label")),
         ),
         Tool(
@@ -427,8 +427,8 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "terminal_run_command",
-            "Send a visible command to the front Terminal.app/iTerm2/Termius tab and press Return.",
-            _schema({"command": {"type": "string"}, "app": {"type": "string", "enum": CO_TE_TERMINAL_APP_KEYS, "default": "terminal"}, "label": {"type": "string"}}, ["command"]),
+            "Send one visible single-line shell command to the front Terminal.app/iTerm2/Termius tab and press Return. For multiple non-interactive commands, join them on one line with semicolons. Use terminal_send_input for prompts or interactive programs. The optional label must be a substring of the actual front-window title; omit it unless known.",
+            _schema({"command": {"type": "string", "description": "One shell command with no newline or carriage-return characters. Join multiple commands with semicolons."}, "app": {"type": "string", "enum": CO_TE_TERMINAL_APP_KEYS, "default": "terminal"}, "label": {"type": "string", "description": "Optional substring of the actual front-window title. Do not use a task description here; omit unless the title is known."}}, ["command"]),
             lambda c, a: terminal_ops.run_command(c, a["command"], a.get("app", "terminal"), a.get("label")),
         ),
         Tool(
@@ -693,6 +693,8 @@ class ToolRegistry:
             }
         )
         self._listed_tool_names = {tool.name for tool in listed_tools}
+        for name in list(self._listed_tool_names):
+            self.tools[f"MCP4ChatGPT.{name}"] = self.tools[name]
 
     def list_tools(self) -> dict[str, Any]:
         return {
@@ -700,6 +702,40 @@ class ToolRegistry:
                 tool.definition(auth_required=not self.config.local_auth_disabled)
                 for name, tool in self.tools.items()
                 if name in self._listed_tool_names
+            ]
+        }
+
+    def list_tool_resources(self) -> dict[str, Any]:
+        return {
+            "resources": [
+                {
+                    "uri": f"mcp4chatgpt://tools/{name}",
+                    "name": f"MCP4ChatGPT.{name}",
+                    "title": self.tools[name].definition(auth_required=False)["title"],
+                    "description": self.tools[name].description,
+                    "mimeType": "application/json",
+                }
+                for name in sorted(self._listed_tool_names)
+            ]
+        }
+
+    def read_tool_resource(self, uri: str) -> dict[str, Any]:
+        prefix = "mcp4chatgpt://tools/"
+        if uri.startswith(prefix):
+            name = uri.removeprefix(prefix)
+        elif uri.startswith("MCP4ChatGPT."):
+            name = uri.removeprefix("MCP4ChatGPT.")
+        else:
+            raise ValueError(f"Unknown resource: {uri}")
+        if name not in self._listed_tool_names:
+            raise ValueError(f"Unknown tool resource: {uri}")
+        return {
+            "contents": [
+                {
+                    "uri": uri,
+                    "mimeType": "application/json",
+                    "text": json.dumps(self.tools[name].definition(auth_required=not self.config.local_auth_disabled), ensure_ascii=False, indent=2),
+                }
             ]
         }
 

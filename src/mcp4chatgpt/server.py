@@ -321,10 +321,9 @@ class Handler(BaseHTTPRequestHandler):
             elif method == "tools/list":
                 result = self.server.registry.list_tools()
             elif method == "resources/list":
-                # ChatGPT Apps discovery probes resources even when the app
-                # is tool-only. Return an empty list rather than JSON-RPC
-                # method-not-found so discovery can continue cleanly.
-                result = {"resources": []}
+                result = self.server.registry.list_tool_resources()
+            elif method == "resources/read":
+                result = self.server.registry.read_tool_resource(str(params.get("uri", "")))
             elif method == "prompts/list":
                 result = {"prompts": []}
             elif method == "tools/call":

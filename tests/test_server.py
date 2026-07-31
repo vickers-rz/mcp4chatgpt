@@ -129,6 +129,37 @@ class ServerTests(unittest.TestCase):
                 server.shutdown()
                 server.server_close()
 
+    def test_mcp_resources_expose_tool_definitions_for_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                token = self.issue_test_token(config)
+                base = f"http://{host}:{port}"
+                resources = post_json(base + "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "resources/list", "params": {}}, token)
+                names = {resource["name"] for resource in resources["result"]["resources"]}
+                self.assertIn("MCP4ChatGPT.terminal_run_command", names)
+
+                read = post_json(
+                    base + "/mcp",
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "resources/read",
+                        "params": {"uri": "mcp4chatgpt://tools/terminal_run_command"},
+                    },
+                    token,
+                )
+                definition = json.loads(read["result"]["contents"][0]["text"])
+                self.assertEqual(definition["name"], "terminal_run_command")
+                self.assertIn("single-line", definition["description"])
+            finally:
+                server.shutdown()
+                server.server_close()
+
     def test_local_auth_bypass_when_enabled(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = replace(make_config(Path(d)), local_auth_disabled=True)

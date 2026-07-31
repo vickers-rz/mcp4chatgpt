@@ -56,6 +56,27 @@ def _unwrap_co_te_result(result: Any) -> Any:
     return result
 
 
+def _optional_label(label: str | None) -> str | None:
+    if label is None:
+        return None
+    label = label.strip()
+    if not label:
+        return None
+    if "\n" in label or "\r" in label:
+        raise ValueError("Terminal label must be a single-line substring of the front-window title.")
+    return label
+
+
+def _single_line_terminal_command(command: str) -> str:
+    command = command.strip()
+    if not command:
+        raise ValueError("Terminal command cannot be empty.")
+    if "\n" not in command and "\r" not in command:
+        return command
+    lines = [line.strip() for line in command.replace("\r\n", "\n").replace("\r", "\n").split("\n")]
+    return "; ".join(line for line in lines if line)
+
+
 def list_supported_apps(config: Config) -> Any:
     return _call_co_te(config, "list_supported_apps", {})
 
@@ -70,7 +91,7 @@ def get_app_context(
     return _call_co_te(
         config,
         "get_app_context",
-        {"app": app, "max_chars": max_chars, "redact_secrets": redact_secrets, "label": label},
+        {"app": app, "max_chars": max_chars, "redact_secrets": redact_secrets, "label": _optional_label(label)},
     )
 
 
@@ -92,7 +113,7 @@ def write_app_text(
             "mode": mode,
             "press_return": press_return,
             "sensitive": sensitive,
-            "label": label,
+            "label": _optional_label(label),
         },
     )
 
@@ -114,7 +135,7 @@ def search_apple_notes_sqlite(config: Config, query: str, limit: int = 20) -> An
 
 
 def run_command(config: Config, command: str, app: str = "terminal", label: str | None = None) -> Any:
-    return _call_co_te(config, "run_terminal_command", {"command": command, "app": app, "label": label})
+    return _call_co_te(config, "run_terminal_command", {"command": _single_line_terminal_command(command), "app": app, "label": _optional_label(label)})
 
 
 def send_input(
@@ -133,6 +154,6 @@ def send_input(
             "press_return": press_return,
             "sensitive": sensitive,
             "app": app,
-            "label": label,
+            "label": _optional_label(label),
         },
     )
