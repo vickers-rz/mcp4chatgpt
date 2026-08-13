@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from . import __version__
 from .audit import AuditLogger
 from .config import Config, load_config
 from .oauth import (
@@ -153,15 +156,44 @@ def _open_webui_search(config: Config, params: dict[str, Any]) -> list[dict[str,
     ]
 
 
-def _make_error(code: int, message: str, request_id: Any = None) -> dict[str, Any]:
-    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+def _make_error(
+    code: int,
+    message: str,
+    request_id: Any = None,
+    data: Any | None = None,
+) -> dict[str, Any]:
+    error: dict[str, Any] = {"code": code, "message": message}
+    if data is not None:
+        error["data"] = data
+    return {"jsonrpc": "2.0", "id": request_id, "error": error}
 
 
 def _make_result(result: Any, request_id: Any) -> dict[str, Any]:
     return {"jsonrpc": "2.0", "id": request_id, "result": result}
 
 
-_SUPPORTED_PROTOCOL_VERSIONS = ("2025-11-25", "2025-03-26", "2024-11-05")
+_LEGACY_PROTOCOL_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+_MODERN_PROTOCOL_VERSION = "2026-07-28"
+_PROTOCOL_VERSION_META_KEY = "io.modelcontextprotocol/protocolVersion"
+_CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
+_CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
+_SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
+_CACHEABLE_MODERN_METHODS = frozenset(
+    {"server/discover", "tools/list", "resources/list", "resources/read", "prompts/list"}
+)
+_NAMED_MODERN_METHODS = {
+    "tools/call": "name",
+    "resources/read": "uri",
+    "prompts/get": "name",
+}
+
+_SERVER_INSTRUCTIONS = (
+    "Before Chrome automation, call ext_connection_status. When connected, use the least-privileged "
+    "ext_* tool that satisfies the task; use ext_run_js only when no dedicated operation is sufficient. "
+    "When the extension is unavailable, use the read-only browser_*/chrome_* AppleScript and Chrome "
+    "Apple Events fallback. local_*, terminal_*, and other write-capable tools may change local or external "
+    "state and still require normal authorization and confirmation."
+)
 
 
 def _requested_protocol_version(handler: BaseHTTPRequestHandler) -> str:
@@ -171,11 +203,44 @@ def _requested_protocol_version(handler: BaseHTTPRequestHandler) -> str:
 
 def _negotiate_protocol_version(handler: BaseHTTPRequestHandler, params: dict[str, Any]) -> str:
     requested = str(params.get("protocolVersion") or _requested_protocol_version(handler))
-    if requested in _SUPPORTED_PROTOCOL_VERSIONS:
+    if requested in _LEGACY_PROTOCOL_VERSIONS:
         return requested
     # Older clients may omit the field or send a future version before falling
     # back. Prefer the newest version this minimal transport advertises.
-    return _SUPPORTED_PROTOCOL_VERSIONS[0]
+    return _LEGACY_PROTOCOL_VERSIONS[0]
+
+
+def _server_capabilities() -> dict[str, Any]:
+    return {
+        "tools": {"listChanged": False},
+        "resources": {"subscribe": False, "listChanged": False},
+        "prompts": {"listChanged": False},
+    }
+
+
+def _decode_mcp_header_value(value: str) -> str:
+    if value.startswith("=?base64?") and value.endswith("?="):
+        encoded = value[len("=?base64?") : -2]
+        try:
+            return base64.b64decode(encoded, validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError) as exc:
+            raise ValueError("malformed Base64 sentinel value") from exc
+    if value != value.strip() or any(ord(char) < 0x20 or ord(char) > 0x7E for char in value):
+        raise ValueError("invalid plain-ASCII header value")
+    return value
+
+
+def _modernize_result(method: str, result: dict[str, Any]) -> dict[str, Any]:
+    modern = dict(result)
+    modern["resultType"] = "complete"
+    response_meta = modern.get("_meta")
+    response_meta = dict(response_meta) if isinstance(response_meta, dict) else {}
+    response_meta[_SERVER_INFO_META_KEY] = {"name": "mcp4chatgpt", "version": __version__}
+    modern["_meta"] = response_meta
+    if method in _CACHEABLE_MODERN_METHODS:
+        modern["ttlMs"] = 0
+        modern["cacheScope"] = "private"
+    return modern
 
 
 class MCPServer(ThreadingHTTPServer):
@@ -280,20 +345,126 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             _json_response(self, 500, {"error": "server_error", "error_description": "An internal error occurred."})
 
-    def _client_id(self) -> str:
-        if self.server.config.local_auth_disabled and _is_local_request(self):
-            return "local-open-webui"
+    def _client_context(self) -> tuple[str, bool, str]:
         auth = self.headers.get("Authorization", "")
-        if not auth.startswith("Bearer "):
-            raise ValueError("Missing Authorization: Bearer token.")
-        return verify_token(self.server.config, auth.removeprefix("Bearer ").strip())
+        if auth.startswith("Bearer "):
+            client_id = verify_token(self.server.config, auth.removeprefix("Bearer ").strip())
+            return client_id, True, "bearer"
+        if self.server.config.local_auth_disabled and _is_local_request(self):
+            return "local-open-webui", False, "local_bypass"
+        raise ValueError("Missing Authorization: Bearer token.")
+
+    def _client_id(self) -> str:
+        return self._client_context()[0]
+
+    def _send_modern_error(
+        self,
+        status: int,
+        code: int,
+        message: str,
+        request_id: Any,
+        *,
+        data: Any | None = None,
+        protocol_version: str = _MODERN_PROTOCOL_VERSION,
+    ) -> None:
+        _mcp_json_response(
+            self,
+            status,
+            _make_error(code, message, request_id, data),
+            protocol_version,
+        )
+
+    def _validate_modern_request(
+        self,
+        method: Any,
+        params: dict[str, Any],
+        request_id: Any,
+    ) -> str | None:
+        request_meta = params.get("_meta")
+        request_meta = request_meta if isinstance(request_meta, dict) else {}
+        body_version = request_meta.get(_PROTOCOL_VERSION_META_KEY)
+        header_version = self.headers.get("MCP-Protocol-Version", "").strip()
+        response_version = header_version or (str(body_version) if body_version is not None else _MODERN_PROTOCOL_VERSION)
+
+        if not header_version or not isinstance(body_version, str) or header_version != body_version:
+            self._send_modern_error(
+                400,
+                -32020,
+                "Header mismatch: MCP-Protocol-Version must match the request _meta protocol version",
+                request_id,
+                protocol_version=response_version,
+            )
+            return None
+
+        supported = [*_LEGACY_PROTOCOL_VERSIONS]
+        if self.server.config.modern_protocol_enabled:
+            supported.insert(0, _MODERN_PROTOCOL_VERSION)
+        if body_version != _MODERN_PROTOCOL_VERSION or not self.server.config.modern_protocol_enabled:
+            self._send_modern_error(
+                400,
+                -32022,
+                "Unsupported protocol version",
+                request_id,
+                data={"requested": body_version, "supported": supported},
+                protocol_version=response_version,
+            )
+            return None
+
+        header_method = self.headers.get("Mcp-Method", "")
+        if not isinstance(method, str) or not header_method or header_method != method:
+            self._send_modern_error(
+                400,
+                -32020,
+                "Header mismatch: Mcp-Method must match the JSON-RPC method",
+                request_id,
+            )
+            return None
+
+        name_field = _NAMED_MODERN_METHODS.get(method)
+        if name_field is not None:
+            body_name = params.get(name_field)
+            raw_header_name = self.headers.get("Mcp-Name", "")
+            try:
+                header_name = _decode_mcp_header_value(raw_header_name) if raw_header_name else ""
+            except ValueError as exc:
+                self._send_modern_error(400, -32020, f"Header mismatch: Mcp-Name is {exc}", request_id)
+                return None
+            if not isinstance(body_name, str) or not raw_header_name or header_name != body_name:
+                self._send_modern_error(
+                    400,
+                    -32020,
+                    "Header mismatch: Mcp-Name must match the request name or uri",
+                    request_id,
+                )
+                return None
+
+        client_capabilities = request_meta.get(_CLIENT_CAPABILITIES_META_KEY)
+        if not isinstance(client_capabilities, dict):
+            self._send_modern_error(
+                400,
+                -32602,
+                f"Invalid params: {_CLIENT_CAPABILITIES_META_KEY} must be an object",
+                request_id,
+            )
+            return None
+        client_info = request_meta.get(_CLIENT_INFO_META_KEY)
+        if client_info is not None and not isinstance(client_info, dict):
+            self._send_modern_error(
+                400,
+                -32602,
+                f"Invalid params: {_CLIENT_INFO_META_KEY} must be an object when provided",
+                request_id,
+            )
+            return None
+        return body_version
 
     def _handle_mcp(self) -> None:
         # Keep auth at the transport boundary: no JSON-RPC method is allowed
         # to run unless the bearer token has already been validated.
         protocol_version = _requested_protocol_version(self)
+        modern_request = False
         try:
-            client_id = self._client_id()
+            client_id, descriptor_auth_required, auth_mode = self._client_context()
         except Exception as exc:
             _auth_required(self, self.server.config, str(exc))
             return
@@ -305,25 +476,61 @@ class Handler(BaseHTTPRequestHandler):
             params = request.get("params") or {}
             if not isinstance(params, dict):
                 raise ValueError("JSON-RPC params must be an object when provided.")
-            self.server.registry.audit.log("mcp_request", client_id=client_id, method=method)
-            if method == "initialize":
+            request_meta = params.get("_meta")
+            body_protocol_version = (
+                request_meta.get(_PROTOCOL_VERSION_META_KEY) if isinstance(request_meta, dict) else None
+            )
+            header_protocol_version = self.headers.get("MCP-Protocol-Version", "").strip()
+            modern_request = body_protocol_version is not None or (
+                method != "initialize"
+                and bool(header_protocol_version)
+                and header_protocol_version not in _LEGACY_PROTOCOL_VERSIONS
+            )
+            if modern_request:
+                validated_version = self._validate_modern_request(method, params, request_id)
+                if validated_version is None:
+                    return
+                protocol_version = validated_version
+            audit_fields: dict[str, Any] = {
+                "client_id": client_id,
+                "method": method,
+                "auth_mode": auth_mode,
+                "protocol_version": protocol_version,
+            }
+            if method == "tools/list":
+                audit_fields.update(
+                    tool_count=len(self.server.registry._listed_tool_names),
+                    toolset_hash=self.server.registry.toolset_hash,
+                )
+            self.server.registry.audit.log("mcp_request", **audit_fields)
+            if modern_request and method == "server/discover":
+                result = {
+                    "supportedVersions": [_MODERN_PROTOCOL_VERSION, *_LEGACY_PROTOCOL_VERSIONS],
+                    "capabilities": _server_capabilities(),
+                    "instructions": _SERVER_INSTRUCTIONS,
+                }
+            elif not modern_request and method == "initialize":
                 protocol_version = _negotiate_protocol_version(self, params)
                 # Minimal MCP handshake. Tool capability discovery happens via
                 # tools/list so the server can keep protocol state stateless.
                 result = {
                     "protocolVersion": protocol_version,
-                    "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "mcp4chatgpt", "version": "0.1.0"},
+                    "capabilities": _server_capabilities(),
+                    "serverInfo": {"name": "mcp4chatgpt", "version": __version__},
+                    "instructions": _SERVER_INSTRUCTIONS,
                 }
             elif request_id is None:
                 _empty_response(self, 202, {"MCP-Protocol-Version": protocol_version})
                 return
             elif method == "tools/list":
-                result = self.server.registry.list_tools()
+                result = self.server.registry.list_tools(auth_required=descriptor_auth_required)
             elif method == "resources/list":
                 result = self.server.registry.list_tool_resources()
             elif method == "resources/read":
-                result = self.server.registry.read_tool_resource(str(params.get("uri", "")))
+                result = self.server.registry.read_tool_resource(
+                    str(params.get("uri", "")),
+                    auth_required=descriptor_auth_required,
+                )
             elif method == "prompts/list":
                 result = {"prompts": []}
             elif method == "tools/call":
@@ -331,11 +538,13 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 _mcp_json_response(
                     self,
-                    200,
+                    404 if modern_request else 200,
                     _make_error(-32601, f"Method not found: {method}", request_id),
                     protocol_version,
                 )
                 return
+            if modern_request:
+                result = _modernize_result(str(method), result)
             _mcp_json_response(self, 200, _make_result(result, request_id), protocol_version)
         except Exception as exc:
             _mcp_json_response(self, 200, _make_error(-32000, str(exc), request_id), protocol_version)

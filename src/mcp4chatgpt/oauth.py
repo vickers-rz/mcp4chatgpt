@@ -91,6 +91,7 @@ def metadata(config: Config) -> dict[str, Any]:
         "grant_types_supported": ["authorization_code"],
         "code_challenge_methods_supported": ["S256", "plain"],
         "token_endpoint_auth_methods_supported": ["none", "client_secret_post"],
+        "scopes_supported": ["local", "web", "knowledge"],
     }
 
 
@@ -100,6 +101,7 @@ def protected_resource_metadata(config: Config) -> dict[str, Any]:
         "resource": f"{base}/mcp",
         "authorization_servers": [base],
         "bearer_methods_supported": ["header"],
+        "scopes_supported": ["local", "web", "knowledge"],
     }
 
 

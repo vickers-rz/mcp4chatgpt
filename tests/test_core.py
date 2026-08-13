@@ -15,6 +15,8 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
+from jsonschema.validators import validator_for
+
 from mcp4chatgpt.audit import AuditLogger
 from mcp4chatgpt.config import Config
 from mcp4chatgpt import ext_ops, knowledge_ops, local_ops, terminal_ops, web_ops
@@ -63,6 +65,7 @@ def make_config(tmp: Path) -> Config:
         log_retention_days=30,
         allowed_hosts=["localhost", "127.0.0.1", "::1"],
         local_auth_disabled=False,
+        modern_protocol_enabled=True,
         ext_bridge_port=8765,
         ext_screenshot_dir=tmp / "screenshots",
     )
@@ -420,7 +423,7 @@ class CoreTests(unittest.TestCase):
     def test_chrome_tools_are_listed_as_read_only(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             registry = ToolRegistry(make_config(Path(d)), AuditLogger(Path(d) / "audit.jsonl"))
-            tools = {tool["name"]: tool for tool in registry.list_tools()["tools"]}
+            tools = {tool["name"]: tool for tool in registry.list_tools(auth_required=True)["tools"]}
             self.assertIn("chrome_list_tabs", tools)
             self.assertIn("chrome_get_active_tab_context", tools)
             self.assertIn("browser_current_tab", tools)
@@ -813,7 +816,17 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
             registry = ToolRegistry(config, AuditLogger(config.audit_log))
-            names = {tool["name"] for tool in registry.list_tools()["tools"]}
+            definitions = registry.list_tools(auth_required=True)["tools"]
+            names = {tool["name"] for tool in definitions}
+            self.assertEqual(len(definitions), 54)
+            self.assertEqual(len(names), 54)
+            self.assertEqual([tool["name"] for tool in definitions], list(registry._listed_tool_names))
+            for tool in definitions:
+                self.assertLessEqual(len(tool["name"]), 128)
+                self.assertTrue({"name", "description", "inputSchema", "annotations"} <= tool.keys())
+                self.assertTrue(all(isinstance(value, bool) for value in tool["annotations"].values()))
+                validator = validator_for(tool["inputSchema"])
+                validator.check_schema(tool["inputSchema"])
             self.assertIn("search_web", names)
             self.assertNotIn("web_search", names)
             self.assertNotIn("web_brave_search", names)
@@ -897,7 +910,7 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
             registry = ToolRegistry(config, AuditLogger(config.audit_log))
-            tools = {tool["name"]: tool for tool in registry.list_tools()["tools"]}
+            tools = {tool["name"]: tool for tool in registry.list_tools(auth_required=True)["tools"]}
 
             self.assertTrue(tools["ext_get_active_tab"]["annotations"]["readOnlyHint"])
             self.assertTrue(tools["ext_screenshot"]["annotations"]["readOnlyHint"])
@@ -911,7 +924,7 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
             registry = ToolRegistry(config, AuditLogger(config.audit_log))
-            tools = {tool["name"]: tool for tool in registry.list_tools()["tools"]}
+            tools = {tool["name"]: tool for tool in registry.list_tools(auth_required=True)["tools"]}
 
             self.assertIn("local execution log", tools["local_run_command"]["description"])
             self.assertIn("background shell execution logs", tools["local_command_log_tail"]["description"])
@@ -926,7 +939,7 @@ class CoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
             registry = ToolRegistry(config, AuditLogger(config.audit_log))
-            tools = {tool["name"]: tool for tool in registry.list_tools()["tools"]}
+            tools = {tool["name"]: tool for tool in registry.list_tools(auth_required=True)["tools"]}
 
             terminal_apps = tools["terminal_get_app_context"]["inputSchema"]["properties"]["app"]["enum"]
             app_apps = tools["app_get_context"]["inputSchema"]["properties"]["app"]["enum"]

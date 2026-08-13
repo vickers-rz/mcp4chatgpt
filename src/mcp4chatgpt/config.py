@@ -67,6 +67,7 @@ class Config:
     log_retention_days: int
     allowed_hosts: list[str]
     local_auth_disabled: bool
+    modern_protocol_enabled: bool
     ext_bridge_port: int
     ext_screenshot_dir: Path
 
@@ -131,6 +132,8 @@ def load_config() -> Config:
         log_retention_days=int(os.environ.get("MCP_LOG_RETENTION_DAYS", "30")),
         allowed_hosts=allowed_hosts,
         local_auth_disabled=os.environ.get("MCP_LOCAL_AUTH_DISABLED", "").strip().lower() in {"1", "true", "yes", "on"},
+        modern_protocol_enabled=os.environ.get("MCP_MODERN_PROTOCOL_ENABLED", "true").strip().lower()
+        in {"1", "true", "yes", "on"},
         ext_bridge_port=int(os.environ.get("EXT_BRIDGE_PORT", "8765")),
         ext_screenshot_dir=ext_screenshot_dir,
     )

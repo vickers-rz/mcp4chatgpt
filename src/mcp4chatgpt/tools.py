@@ -12,6 +12,7 @@ MCP 服务向客户端暴露的核心不是 Python 函数本身，而是一组�
 
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import dataclass
 from typing import Any, Callable
@@ -337,31 +338,31 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "browser_list_tabs",
-            "Alias for chrome_list_tabs. List titles and URLs for open Google Chrome tabs on this Mac.",
+            "[AppleScript/Chrome Apple Events fallback, read-only] List open Chrome tab titles and URLs. Use ext_list_tabs when the MCP4ChatGPT Chrome extension is connected.",
             _schema({"max_tabs": {"type": "integer", "default": 80}}),
             lambda c, a: chrome_ops.list_tabs(c, int(a.get("max_tabs", 80))),
         ),
         Tool(
             "browser_current_tab",
-            "Return the front Google Chrome tab title, URL, metadata, and selected text without body text.",
+            "[AppleScript/Chrome Apple Events fallback, read-only] Return the front Chrome tab title, URL, metadata, and selected text. Use ext_get_active_tab when the Chrome extension is connected.",
             _schema({"max_chars": {"type": "integer", "default": 12000}}),
             lambda c, a: chrome_ops.get_active_tab_context(c, int(a.get("max_chars", 12000)), False, True),
         ),
         Tool(
             "browser_get_page_text",
-            "Read visible body text from the front Google Chrome tab.",
+            "[AppleScript/Chrome Apple Events fallback, read-only] Read visible body text from the front Chrome tab. Use ext_get_active_tab with include_text=true when the Chrome extension is connected.",
             _schema({"max_chars": {"type": "integer", "default": 12000}}),
             lambda c, a: chrome_ops.get_active_tab_context(c, int(a.get("max_chars", 12000)), True, False),
         ),
         Tool(
             "browser_get_selection",
-            "Read selected text from the front Google Chrome tab.",
+            "[AppleScript/Chrome Apple Events fallback, read-only] Read selected text from the front Chrome tab. Use ext_get_active_tab with include_selection=true when the Chrome extension is connected.",
             _schema({"max_chars": {"type": "integer", "default": 12000}}),
             lambda c, a: chrome_ops.get_active_tab_context(c, int(a.get("max_chars", 12000)), False, True),
         ),
         Tool(
             "browser_get_links",
-            "Read links from the front Google Chrome tab.",
+            "[AppleScript/Chrome Apple Events fallback, read-only] Read links from the front Chrome tab. Prefer ext_get_dom when the Chrome extension is connected.",
             _schema({"max_links": {"type": "integer", "default": 100}}),
             lambda c, a: chrome_ops.get_links(c, int(a.get("max_links", 100))),
         ),
@@ -692,16 +693,17 @@ class ToolRegistry:
                 ),
             }
         )
-        self._listed_tool_names = {tool.name for tool in listed_tools}
-        for name in list(self._listed_tool_names):
+        self._listed_tool_names = tuple(tool.name for tool in listed_tools)
+        self._listed_tool_name_set = frozenset(self._listed_tool_names)
+        self.toolset_hash = hashlib.sha256("\n".join(self._listed_tool_names).encode("utf-8")).hexdigest()
+        for name in self._listed_tool_names:
             self.tools[f"MCP4ChatGPT.{name}"] = self.tools[name]
 
-    def list_tools(self) -> dict[str, Any]:
+    def list_tools(self, *, auth_required: bool) -> dict[str, Any]:
         return {
             "tools": [
-                tool.definition(auth_required=not self.config.local_auth_disabled)
-                for name, tool in self.tools.items()
-                if name in self._listed_tool_names
+                self.tools[name].definition(auth_required=auth_required)
+                for name in self._listed_tool_names
             ]
         }
 
@@ -719,7 +721,7 @@ class ToolRegistry:
             ]
         }
 
-    def read_tool_resource(self, uri: str) -> dict[str, Any]:
+    def read_tool_resource(self, uri: str, *, auth_required: bool) -> dict[str, Any]:
         prefix = "mcp4chatgpt://tools/"
         if uri.startswith(prefix):
             name = uri.removeprefix(prefix)
@@ -727,14 +729,14 @@ class ToolRegistry:
             name = uri.removeprefix("MCP4ChatGPT.")
         else:
             raise ValueError(f"Unknown resource: {uri}")
-        if name not in self._listed_tool_names:
+        if name not in self._listed_tool_name_set:
             raise ValueError(f"Unknown tool resource: {uri}")
         return {
             "contents": [
                 {
                     "uri": uri,
                     "mimeType": "application/json",
-                    "text": json.dumps(self.tools[name].definition(auth_required=not self.config.local_auth_disabled), ensure_ascii=False, indent=2),
+                    "text": json.dumps(self.tools[name].definition(auth_required=auth_required), ensure_ascii=False, indent=2),
                 }
             ]
         }

@@ -11,8 +11,10 @@ from dataclasses import replace
 from pathlib import Path
 from unittest import mock
 
+from mcp4chatgpt import __version__
 from mcp4chatgpt.oauth import issue_token
 from mcp4chatgpt.server import create_server
+from mcp4chatgpt.tools import build_tools
 
 from test_core import make_config
 
@@ -109,6 +111,28 @@ class ServerTests(unittest.TestCase):
         oauth.AUTH_CODES[code] = {"client_id": client_id, "redirect_uri": "https://example.test/cb", "created_at": time.time()}
         return issue_token(config, {"code": code, "client_id": client_id})["access_token"]
 
+    @staticmethod
+    def modern_params(**values) -> dict:
+        return {
+            **values,
+            "_meta": {
+                "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+                "io.modelcontextprotocol/clientInfo": {"name": "test-client", "version": "1.0.0"},
+                "io.modelcontextprotocol/clientCapabilities": {},
+            },
+        }
+
+    @staticmethod
+    def modern_headers(method: str, name: str | None = None) -> dict[str, str]:
+        headers = {
+            "Accept": "application/json, text/event-stream",
+            "MCP-Protocol-Version": "2026-07-28",
+            "Mcp-Method": method,
+        }
+        if name is not None:
+            headers["Mcp-Name"] = name
+        return headers
+
     def test_mcp_initialize_and_tools_list(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -121,10 +145,74 @@ class ServerTests(unittest.TestCase):
                 base = f"http://{host}:{port}"
                 init = post_json(base + "/mcp", {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}, token)
                 self.assertEqual(init["result"]["serverInfo"]["name"], "mcp4chatgpt")
+                self.assertEqual(init["result"]["serverInfo"]["version"], __version__)
+                self.assertEqual(
+                    init["result"]["capabilities"],
+                    {
+                        "tools": {"listChanged": False},
+                        "resources": {"subscribe": False, "listChanged": False},
+                        "prompts": {"listChanged": False},
+                    },
+                )
+                instructions = init["result"]["instructions"]
+                self.assertLessEqual(len(instructions), 512)
+                self.assertLess(instructions.index("ext_connection_status"), instructions.index("ext_run_js"))
+                self.assertIn("least-privileged", instructions)
                 tools = post_json(base + "/mcp", {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, token)
-                names = {tool["name"] for tool in tools["result"]["tools"]}
-                self.assertIn("knowledge_search", names)
-                self.assertIn("web_scrape", names)
+                definitions = tools["result"]["tools"]
+                names = [tool["name"] for tool in definitions]
+                self.assertEqual(names, [tool.name for tool in build_tools()])
+                self.assertEqual(len(names), 54)
+                self.assertEqual(len(set(names)), 54)
+                for tool in definitions:
+                    self.assertIn("securitySchemes", tool)
+                    self.assertEqual(tool["securitySchemes"], tool["_meta"]["securitySchemes"])
+                expected_browser = {
+                    "browser_list_tabs",
+                    "browser_current_tab",
+                    "browser_get_page_text",
+                    "browser_get_selection",
+                    "browser_get_links",
+                }
+                expected_ext = {
+                    "ext_connection_status",
+                    "ext_list_tabs",
+                    "ext_get_active_tab",
+                    "ext_get_dom",
+                    "ext_get_selection",
+                    "ext_screenshot",
+                    "ext_navigate",
+                    "ext_click_element",
+                    "ext_fill_input",
+                    "ext_run_js",
+                    "ext_listen_changes",
+                }
+                self.assertTrue(expected_browser <= set(names))
+                self.assertTrue(expected_ext <= set(names))
+                self.assertNotIn("web_search", names)
+                self.assertNotIn("MCP4ChatGPT.server_info", names)
+
+                alias_call = post_json(
+                    base + "/mcp",
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": {"name": "MCP4ChatGPT.server_info", "arguments": {}},
+                    },
+                    token,
+                )
+                self.assertEqual(alias_call["result"]["structuredContent"]["name"], "mcp4chatgpt")
+
+                audit_events = [
+                    json.loads(line)
+                    for line in config.audit_log.read_text(encoding="utf-8").splitlines()
+                    if line.strip()
+                ]
+                list_event = next(event for event in audit_events if event.get("method") == "tools/list")
+                self.assertEqual(list_event["auth_mode"], "bearer")
+                self.assertEqual(list_event["tool_count"], 54)
+                self.assertEqual(len(list_event["toolset_hash"]), 64)
             finally:
                 server.shutdown()
                 server.server_close()
@@ -156,6 +244,8 @@ class ServerTests(unittest.TestCase):
                 definition = json.loads(read["result"]["contents"][0]["text"])
                 self.assertEqual(definition["name"], "terminal_run_command")
                 self.assertIn("single-line", definition["description"])
+                self.assertIn("securitySchemes", definition)
+                self.assertEqual(definition["securitySchemes"], definition["_meta"]["securitySchemes"])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -184,9 +274,54 @@ class ServerTests(unittest.TestCase):
             host, port = server.server_address
             try:
                 tools = post_json(f"http://{host}:{port}/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
-                first_tool = tools["result"]["tools"][0]
-                self.assertNotIn("securitySchemes", first_tool)
-                self.assertNotIn("securitySchemes", first_tool["_meta"])
+                definitions = tools["result"]["tools"]
+                self.assertEqual(len(definitions), 54)
+                for tool in definitions:
+                    self.assertNotIn("securitySchemes", tool)
+                    self.assertNotIn("securitySchemes", tool["_meta"])
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_local_request_with_bearer_keeps_oauth_tool_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), local_auth_disabled=True)
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                token = self.issue_test_token(config)
+                tools = post_json(
+                    f"http://{host}:{port}/mcp",
+                    {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}},
+                    token,
+                )
+                for tool in tools["result"]["tools"]:
+                    self.assertIn("securitySchemes", tool)
+                    self.assertIn("securitySchemes", tool["_meta"])
+                events = [json.loads(line) for line in config.audit_log.read_text(encoding="utf-8").splitlines()]
+                event = next(item for item in events if item.get("method") == "tools/list")
+                self.assertEqual(event["auth_mode"], "bearer")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_oauth_discovery_advertises_tool_scopes(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                base = f"http://{host}:{port}"
+                status, auth_metadata = get_json(base + "/.well-known/oauth-authorization-server")
+                self.assertEqual(status, 200)
+                self.assertEqual(auth_metadata["scopes_supported"], ["local", "web", "knowledge"])
+                status, resource_metadata = get_json(base + "/.well-known/oauth-protected-resource")
+                self.assertEqual(status, 200)
+                self.assertEqual(resource_metadata["scopes_supported"], ["local", "web", "knowledge"])
             finally:
                 server.shutdown()
                 server.server_close()
@@ -231,6 +366,236 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(body, b"")
                 self.assertEqual(headers["Content-Length"], "0")
                 self.assertEqual(headers["MCP-Protocol-Version"], "2025-11-25")
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_mcp_2026_dual_era_discovery_and_toolset_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                token = self.issue_test_token(config)
+                base = f"http://{host}:{port}/mcp"
+
+                legacy = post_json(
+                    base,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "legacy-init",
+                        "method": "initialize",
+                        "params": {"protocolVersion": "2025-06-18"},
+                    },
+                    token,
+                )
+                self.assertEqual(legacy["result"]["protocolVersion"], "2025-06-18")
+                legacy_tools = post_json(
+                    base,
+                    {"jsonrpc": "2.0", "id": "legacy-list", "method": "tools/list", "params": {}},
+                    token,
+                )["result"]
+
+                status, body, headers = post_raw_response(
+                    base,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "discover",
+                        "method": "server/discover",
+                        "params": self.modern_params(),
+                    },
+                    token=token,
+                    extra_headers=self.modern_headers("server/discover"),
+                )
+                self.assertEqual(status, 200)
+                self.assertEqual(headers["MCP-Protocol-Version"], "2026-07-28")
+                discover = json.loads(body)["result"]
+                self.assertEqual(discover["resultType"], "complete")
+                self.assertEqual(discover["supportedVersions"][0], "2026-07-28")
+                self.assertIn("2025-06-18", discover["supportedVersions"])
+                self.assertEqual(discover["ttlMs"], 0)
+                self.assertEqual(discover["cacheScope"], "private")
+                self.assertEqual(
+                    discover["_meta"]["io.modelcontextprotocol/serverInfo"],
+                    {"name": "mcp4chatgpt", "version": __version__},
+                )
+
+                status, body, _ = post_raw_response(
+                    base,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "modern-list",
+                        "method": "tools/list",
+                        "params": self.modern_params(),
+                    },
+                    token=token,
+                    extra_headers=self.modern_headers("tools/list"),
+                )
+                self.assertEqual(status, 200)
+                modern_tools = json.loads(body)["result"]
+                self.assertEqual(
+                    [tool["name"] for tool in modern_tools["tools"]],
+                    [tool["name"] for tool in legacy_tools["tools"]],
+                )
+                self.assertEqual(len(modern_tools["tools"]), 54)
+                self.assertEqual(modern_tools["resultType"], "complete")
+                self.assertEqual((modern_tools["ttlMs"], modern_tools["cacheScope"]), (0, "private"))
+
+                status, body, _ = post_raw_response(
+                    base,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": "modern-call",
+                        "method": "tools/call",
+                        "params": self.modern_params(name="server_info", arguments={}),
+                    },
+                    token=token,
+                    extra_headers=self.modern_headers("tools/call", "server_info"),
+                )
+                self.assertEqual(status, 200)
+                call_result = json.loads(body)["result"]
+                self.assertEqual(call_result["resultType"], "complete")
+                self.assertNotIn("ttlMs", call_result)
+                self.assertEqual(call_result["structuredContent"]["name"], "mcp4chatgpt")
+
+                list_events = [
+                    json.loads(line)
+                    for line in config.audit_log.read_text(encoding="utf-8").splitlines()
+                    if line.strip() and json.loads(line).get("method") == "tools/list"
+                ]
+                self.assertEqual(len(list_events), 2)
+                self.assertEqual({event["toolset_hash"] for event in list_events}, {server.registry.toolset_hash})
+                self.assertEqual({event["auth_mode"] for event in list_events}, {"bearer"})
+                self.assertEqual({event["tool_count"] for event in list_events}, {54})
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_mcp_2026_rejects_protocol_header_and_method_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                token = self.issue_test_token(config)
+                base = f"http://{host}:{port}/mcp"
+                request = {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": self.modern_params(),
+                }
+
+                status, body, _ = post_raw_response(base, request, token=token)
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body)["error"]["code"], -32020)
+
+                status, body, _ = post_raw_response(
+                    base,
+                    request,
+                    token=token,
+                    extra_headers={"MCP-Protocol-Version": "2026-07-28", "Mcp-Method": "resources/list"},
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body)["error"]["code"], -32020)
+
+                missing_capabilities = self.modern_params()
+                del missing_capabilities["_meta"]["io.modelcontextprotocol/clientCapabilities"]
+                status, body, _ = post_raw_response(
+                    base,
+                    {**request, "params": missing_capabilities},
+                    token=token,
+                    extra_headers=self.modern_headers("tools/list"),
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body)["error"]["code"], -32602)
+
+                unknown_params = self.modern_params()
+                unknown_params["_meta"]["io.modelcontextprotocol/protocolVersion"] = "2099-01-01"
+                status, body, _ = post_raw_response(
+                    base,
+                    {**request, "params": unknown_params},
+                    token=token,
+                    extra_headers={"MCP-Protocol-Version": "2099-01-01", "Mcp-Method": "tools/list"},
+                )
+                self.assertEqual(status, 400)
+                unsupported = json.loads(body)["error"]
+                self.assertEqual(unsupported["code"], -32022)
+                self.assertEqual(unsupported["data"]["requested"], "2099-01-01")
+                self.assertIn("2026-07-28", unsupported["data"]["supported"])
+
+                status, body, _ = post_raw_response(
+                    base,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "example/unknown",
+                        "params": self.modern_params(),
+                    },
+                    token=token,
+                    extra_headers=self.modern_headers("example/unknown"),
+                )
+                self.assertEqual(status, 404)
+                self.assertEqual(json.loads(body)["error"]["code"], -32601)
+
+                status, body, _ = post_raw_response(
+                    base,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 3,
+                        "method": "tools/call",
+                        "params": self.modern_params(name="server_info", arguments={}),
+                    },
+                    token=token,
+                    extra_headers=self.modern_headers("tools/call"),
+                )
+                self.assertEqual(status, 400)
+                self.assertEqual(json.loads(body)["error"]["code"], -32020)
+            finally:
+                server.shutdown()
+                server.server_close()
+
+    def test_mcp_2026_rollback_switch_preserves_legacy(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), modern_protocol_enabled=False)
+            server = create_server(config)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            host, port = server.server_address
+            try:
+                token = self.issue_test_token(config)
+                base = f"http://{host}:{port}/mcp"
+                status, body, _ = post_raw_response(
+                    base,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 1,
+                        "method": "server/discover",
+                        "params": self.modern_params(),
+                    },
+                    token=token,
+                    extra_headers=self.modern_headers("server/discover"),
+                )
+                self.assertEqual(status, 400)
+                error = json.loads(body)["error"]
+                self.assertEqual(error["code"], -32022)
+                self.assertNotIn("2026-07-28", error["data"]["supported"])
+
+                legacy = post_json(
+                    base,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": 2,
+                        "method": "initialize",
+                        "params": {"protocolVersion": "2025-11-25"},
+                    },
+                    token,
+                )
+                self.assertEqual(legacy["result"]["protocolVersion"], "2025-11-25")
             finally:
                 server.shutdown()
                 server.server_close()
