@@ -15,4 +15,4 @@ fi
 if [ ! -x "$PYTHON_BIN" ]; then
   PYTHON_BIN="$(command -v python3)"
 fi
-PYTHONPATH=src exec "$PYTHON_BIN" -m mcp4chatgpt.server
+PYTHONPATH=src exec "$PYTHON_BIN" -m mcp4chatgpt.runtime

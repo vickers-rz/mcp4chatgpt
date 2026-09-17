@@ -30,7 +30,7 @@ file_stamp() {
 }
 
 service_running() {
-  pgrep -f "mcp4chatgpt.server" >/dev/null 2>&1
+  pgrep -f "mcp4chatgpt.runtime" >/dev/null 2>&1
 }
 
 tunnel_running() {

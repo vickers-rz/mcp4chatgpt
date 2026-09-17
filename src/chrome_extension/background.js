@@ -204,6 +204,8 @@ function updateIcon(state) {
 // Message dispatch
 // ---------------------------------------------------------------------------
 
+import { cmdBrowserSearch, cmdBrowserRead } from "./browser_search.js";
+
 function handleMessage(msg) {
   if (msg.type === "auth_ok") {
     console.log("[MCP4ChatGPT] Authenticated ✓");
@@ -226,6 +228,8 @@ async function executeCommand(id, cmd, args) {
     let result;
     switch (cmd) {
       case "list_tabs":         result = await cmdListTabs(args); break;
+      case "browser_search":    result = await cmdBrowserSearch(args); break;
+      case "browser_read":      result = await cmdBrowserRead(args); break;
       case "get_active_tab":    result = await cmdGetActiveTab(args); break;
       case "get_dom":           result = await cmdGetDom(args); break;
       case "get_selection":     result = await cmdGetSelection(args); break;

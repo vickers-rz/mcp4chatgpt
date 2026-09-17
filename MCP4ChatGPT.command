@@ -13,7 +13,7 @@ PUBLIC_HEALTH="${MCP_PUBLIC_BASE_URL%/}/health"
 CONNECTOR_URL="${MCP_PUBLIC_BASE_URL%/}/mcp"
 SERVICE_PID_FILE="$ROOT/tmp.service.pid"
 TUNNEL_PID_FILE="$ROOT/tmp.cloudflared.pid"
-SERVICE_PATTERN="[m]cp4chatgpt.server"
+SERVICE_PATTERN="[m]cp4chatgpt.runtime"
 TUNNEL_PATTERN="[c]loudflared tunnel --config .*cloudflared-mcp4chatgpt.yml run mcp4chatgpt"
 
 health_host() {

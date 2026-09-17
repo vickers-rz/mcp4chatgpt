@@ -10,7 +10,7 @@ import threading
 import time
 import unittest
 import urllib.error
-from base64 import b64encode
+from base64 import b64decode, b64encode
 from dataclasses import replace
 from pathlib import Path
 from unittest import mock
@@ -72,6 +72,31 @@ def make_config(tmp: Path) -> Config:
 
 
 class CoreTests(unittest.TestCase):
+    def test_local_expose_file_returns_resource_link_and_blob_resource(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            target = config.allowed_roots[0] / "sample.bin"
+            payload = b"\x00\x01MCP-file-resource\xff"
+            target.write_bytes(payload)
+            registry = ToolRegistry(config, AuditLogger(config.audit_log))
+
+            exposed = registry.call_tool("local_expose_file", {"path": str(target)})
+            self.assertEqual(exposed["content"][0]["type"], "resource_link")
+            uri = exposed["content"][0]["uri"]
+            self.assertTrue(uri.startswith("mcp4chatgpt://files/"))
+            self.assertEqual(exposed["structuredContent"]["size"], len(payload))
+
+            listed = registry.list_tool_resources()["resources"]
+            self.assertTrue(any(resource.get("uri") == uri for resource in listed))
+
+            read = registry.read_tool_resource(uri, auth_required=False)
+            self.assertEqual(read["contents"][0]["uri"], uri)
+            self.assertEqual(b64decode(read["contents"][0]["blob"]), payload)
+
+            target.write_bytes(payload + b"changed")
+            with self.assertRaisesRegex(ValueError, "changed after it was exposed"):
+                registry.read_tool_resource(uri, auth_required=False)
+
     def test_path_allowlist(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -818,8 +843,9 @@ class CoreTests(unittest.TestCase):
             registry = ToolRegistry(config, AuditLogger(config.audit_log))
             definitions = registry.list_tools(auth_required=True)["tools"]
             names = {tool["name"] for tool in definitions}
-            self.assertEqual(len(definitions), 54)
-            self.assertEqual(len(names), 54)
+            self.assertEqual(len(definitions), len(registry._listed_tool_names))
+            self.assertEqual(len(names), len(definitions))
+            self.assertTrue({"ext_search_web", "ext_read_webpage", "ext_web_rag"} <= names)
             self.assertEqual([tool["name"] for tool in definitions], list(registry._listed_tool_names))
             for tool in definitions:
                 self.assertLessEqual(len(tool["name"]), 128)
@@ -887,13 +913,29 @@ class CoreTests(unittest.TestCase):
             ):
                 result = _search_web(
                     config,
-                    {"query": "test", "result_count": 1, "deep_read": True},
+                    {"query": "test", "result_count": 1, "deep_read": True, "backend": "brave"},
                 )
 
             self.assertNotIn("raw", result)
             self.assertNotIn("content", result["results"][0])
             self.assertEqual(len(result["results"][0]["snippet"]), 2000)
             self.assertEqual(len(result["results"][0]["markdown"]), 8000)
+
+    def test_search_web_defaults_to_chrome_extension_backend(self) -> None:
+        from mcp4chatgpt.tools import _search_web
+
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            with mock.patch(
+                "mcp4chatgpt.tools.browser_search.search",
+                return_value={"results": [{"title": "Local", "url": "https://example.test", "snippet": "hit"}]},
+            ) as browser, mock.patch("mcp4chatgpt.tools.web_ops.combined_search") as api:
+                result = _search_web(config, {"query": "test", "result_count": 1})
+
+            browser.assert_called_once_with(config, "test", 1)
+            api.assert_not_called()
+            self.assertEqual(result["backend"], "browser")
+            self.assertEqual(result["engine"], "chrome_bing")
 
     def test_tool_result_wraps_non_object_structured_content(self) -> None:
         from mcp4chatgpt.tools import _ok

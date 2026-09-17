@@ -1,5 +1,21 @@
 # MCP4ChatGPT
 
+### Local Chrome search and RAG
+
+Reload the unpacked extension at `chrome://extensions` after updating, then restart
+the MCP service and refresh the client's tool list. The existing authenticated
+WebSocket bridge and Chrome permissions are reused; no search API key is needed.
+
+- `ext_search_web(query, result_count=5)`: search Bing in a temporary inactive Chrome tab.
+- `ext_read_webpage(url, max_chars=30000)`: extract rendered article/main/body text using the local browser session.
+- `ext_web_rag(query, result_count=3, max_chunks=6, save_sources=false)`: search, read pages, and return Chinese/English BM25-ranked chunks with source URLs and citation IDs. The calling model generates the answer using this evidence. Set `save_sources=true` to retain page text for `knowledge_fetch` and other knowledge tools.
+- `search_web(query, backend="browser")`: the unified search entry point now defaults to the same Chrome Extension route. Use `backend="auto"` only when API fallback is acceptable, or select `brave` / `firecrawl` explicitly.
+
+Only operation-owned temporary tabs are closed. Failed pages are reported individually.
+CAPTCHA, consent screens, changed Bing markup, and pages that render late may prevent
+extraction; the tools do not bypass these. This is lexical retrieval, not embeddings.
+Open WebUI `/search` retains its API-backed behavior. Use `ext_web_rag` when ranked page chunks and citation metadata are needed in addition to search results.
+
 ChatGPT Web-connectable MCP server for:
 
 - local ops: files, commands, Git, and macOS terminal interaction
@@ -139,6 +155,24 @@ MCP endpoint:
 - `/mcp`
 
 During OAuth authorization, enter `MCP_AUTH_SECRET` on the local approval form.
+
+### Refreshing ChatGPT tool actions after server changes
+
+ChatGPT keeps an app-side snapshot of the MCP tool/action definitions it has
+scanned and approved. Restarting MCP4ChatGPT, reauthorizing OAuth, or reloading
+the Chrome extension does **not** by itself guarantee that newly added or
+renamed tools become available in an existing ChatGPT app connection.
+
+After changing the MCP tool surface, use the ChatGPT app's **Refresh** / **Scan
+Tools** action (wording depends on the ChatGPT UI) and review the updated tool
+set. If the current app-management UI does not provide a refresh action,
+recreate the development app/connection so ChatGPT scans `/mcp` again. New
+server tools can be fully functional for other MCP clients while remaining
+invisible to ChatGPT until this app-side snapshot is refreshed.
+
+Chrome-extension reload is a separate operation: use it after changing
+`src/chrome_extension/*`, not as a substitute for refreshing ChatGPT's MCP tool
+snapshot.
 
 ## Open WebUI
 
@@ -307,5 +341,7 @@ login background item unless you explicitly install and modify it.
 ## Safety Notes
 
 This is a full local-ops server. It can read/write allowed files and run allowed commands. Keep it behind OAuth and HTTPS. Set `MCP_ALLOWED_ROOTS` narrowly. The HTTP server rejects unknown `Host` headers by default; use `MCP_ALLOWED_HOSTS` only for additional trusted reverse-proxy hostnames.
+
+Browser research tools are intentionally operator-trusted by default on this self-hosted, on-demand MCP. They may navigate directly to localhost, RFC1918/private IPs, CGNAT/Tailscale-style addresses, `.local` names, and single-label intranet hosts. Set `MCP_BROWSER_RESEARCH_STRICT_NETWORK=1` only if you want the older restrictive network preflight; `MCP_BROWSER_RESEARCH_ALLOW_HOSTS` remains available as an exception list in that strict mode.
 
 co-te tools reuse `/Users/vickers/Documents/MCP_Creator/codex_work_with_apps/co-te.py`; macOS Automation, Accessibility, and Apple Notes Full Disk Access permissions still apply to the process running this server.

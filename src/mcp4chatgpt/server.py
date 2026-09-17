@@ -188,11 +188,11 @@ _NAMED_MODERN_METHODS = {
 }
 
 _SERVER_INSTRUCTIONS = (
-    "Before Chrome automation, call ext_connection_status. When connected, use the least-privileged "
-    "ext_* tool that satisfies the task; use ext_run_js only when no dedicated operation is sufficient. "
-    "When the extension is unavailable, use the read-only browser_*/chrome_* AppleScript and Chrome "
-    "Apple Events fallback. local_*, terminal_*, and other write-capable tools may change local or external "
-    "state and still require normal authorization and confirmation."
+    "Use MCP4ChatGPT as a browser/file gateway. Before ext_* Chrome work call ext_connection_status; prefer "
+    "explicit IDs and the least-privileged tool that fits. Use ext_* for the extension bridge and chrome_devtools__* for snapshots, "
+    "network inspection, and interaction; use ext_run_js only when no dedicated tool fits. For non-text local "
+    "files use local_expose_file, then resource_link/resources/read, instead of local RAG. Use browser_*/chrome_* "
+    "only as read-only fallback when the extension is unavailable."
 )
 
 
@@ -550,14 +550,14 @@ class Handler(BaseHTTPRequestHandler):
             _mcp_json_response(self, 200, _make_error(-32000, str(exc), request_id), protocol_version)
 
 
-def create_server(config: Config | None = None) -> MCPServer:
+def create_server(config: Config | None = None, *, downstream_manager: Any | None = None) -> MCPServer:
     config = config or load_config()
     audit = AuditLogger(
         config.audit_log,
         rotate_bytes=config.log_rotate_bytes,
         retention_days=config.log_retention_days,
     )
-    registry = ToolRegistry(config, audit)
+    registry = ToolRegistry(config, audit, downstream_manager=downstream_manager)
     server = MCPServer((config.bind_host, config.bind_port), Handler)
     server.config = config
     server.registry = registry
@@ -565,8 +565,51 @@ def create_server(config: Config | None = None) -> MCPServer:
 
 
 def main() -> None:
+    import atexit
+    import logging
+    from pathlib import Path
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(name)s %(levelname)s %(message)s",
+    )
+
     config = load_config()
-    server = create_server(config)
+
+    # ── Start downstream MCP manager (fault-tolerant) ──────────
+    downstream_manager = None
+    try:
+        from .downstream.manager import DownstreamMCPManager
+        downstream_manager = DownstreamMCPManager()
+        project_root = Path(__file__).resolve().parents[2]
+        downstream_manager.start_all(project_root)
+
+        ds_status = downstream_manager.get_status()
+        ds_list = ds_status.get("downstream", [])
+        if ds_list:
+            for ds in ds_list:
+                print(
+                    f"downstream  {ds['id']}: state={ds['state']} "
+                    f"tools={ds.get('tool_count', 0)}"
+                )
+        else:
+            print("downstream  no downstream MCPs configured")
+
+        # Ensure downstream processes are cleaned up on exit
+        def _stop_downstream() -> None:
+            try:
+                downstream_manager.stop_all(timeout=10)
+            except Exception:
+                pass
+        atexit.register(_stop_downstream)
+
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "downstream manager startup failed (non-fatal): %s", exc
+        )
+        downstream_manager = None
+
+    server = create_server(config, downstream_manager=downstream_manager)
     if config.tls_cert_path and config.tls_key_path:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(config.tls_cert_path, config.tls_key_path)

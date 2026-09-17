@@ -1,0 +1,59 @@
+# Downstream MCP Server Configuration
+# ─────────────────────────────────────
+# MCP4ChatGPT can aggregate tools from downstream MCP servers.
+# Each [downstream_mcp.<id>] section defines one downstream server.
+# Downstream failures are isolated — they never crash the core service.
+
+# ── Chrome DevTools MCP ────────────────────────────────────────
+# Provides CDP (Chrome DevTools Protocol) access to the local Chrome browser.
+# Requires: Node.js/npx, Chrome with remote debugging enabled.
+#
+# WARNING: Exposing Chrome DevTools to remote MCP clients grants access
+# to the currently logged-in Chrome profile, including:
+#   - Page DOM and JavaScript execution
+#   - Network requests and responses
+#   - Cookies, sessions, and authentication state
+# Only enable this if you understand the security implications.
+
+[downstream_mcp.chrome_devtools]
+# Phase 1.5 live acceptance enabled after the fake-downstream suite passed.
+enabled = true
+transport = "stdio"
+command = "npx"
+args = ["-y", "chrome-devtools-mcp@latest", "--autoConnect"]
+cwd = "/Users/vickers"
+startup_timeout = 30.0
+call_timeout = 60.0
+# namespace = "chrome_devtools"  # defaults to the id
+# Omit allow_tools to allow all discovered tools. If present, an empty list
+# intentionally exposes no tools. deny_tools defaults to none denied.
+# allow_tools = ["list_pages", "select_page", "evaluate_script"]
+# deny_tools = []
+
+[downstream_mcp.wps]
+enabled = true
+transport = "stdio"
+command = "/Users/vickers/.local/bin/node"
+args = ["/Users/vickers/Documents/MCP_Creator/wps-mac-bridge-poc/server/index.js"]
+cwd = "/Users/vickers/Documents/MCP_Creator/wps-mac-bridge-poc"
+startup_timeout = 15.0
+call_timeout = 60.0
+allow_tools = [
+  "wps_status",
+  "wps_word_get_document_info",
+  "wps_word_open",
+  "wps_word_export_pdf",
+  "wps_word_save_as_docx",
+  "wps_word_close",
+]
+
+# ── Example: Future downstream MCP (disabled) ─────────────────
+# [downstream_mcp.filesystem]
+# enabled = false
+# transport = "stdio"
+# command = "npx"
+# args = ["-y", "@anthropic/mcp-filesystem"]
+# cwd = "/Users/vickers"
+# startup_timeout = 15.0
+# call_timeout = 30.0
+# allow_tools = ["read_file", "list_directory"]

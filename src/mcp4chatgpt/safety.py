@@ -10,8 +10,12 @@ MCP 的工具说明只能影响模型行为，不能构成安全控制。本模�
 
 from __future__ import annotations
 
+import ipaddress
+import os
 import re
+import socket
 from pathlib import Path
+from urllib.parse import urlsplit
 
 
 SECRET_PATTERNS = [
@@ -61,6 +65,95 @@ def redact(text: str) -> str:
             # single-group token patterns
             redacted = pattern.sub("[REDACTED]", redacted)
     return redacted
+
+
+def _research_host_allowlist() -> set[str]:
+    return {
+        item.strip().lower().rstrip(".")
+        for item in os.environ.get("MCP_BROWSER_RESEARCH_ALLOW_HOSTS", "").split(",")
+        if item.strip()
+    }
+
+
+def _host_is_explicitly_allowed(host: str) -> bool:
+    host = host.lower().rstrip(".")
+    for item in _research_host_allowlist():
+        if item.startswith("*."):
+            suffix = item[1:]
+            if host.endswith(suffix) and host != suffix[1:]:
+                return True
+        elif host == item:
+            return True
+    return False
+
+
+def _strict_research_network_enabled() -> bool:
+    return os.environ.get("MCP_BROWSER_RESEARCH_STRICT_NETWORK", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def validate_research_url(url: str, *, resolve_dns: bool = True) -> str:
+    """Validate a URL used by browser research tools.
+
+    This self-hosted MCP defaults to operator-trusted network access: public sites,
+    localhost, RFC1918/private ranges, CGNAT/Tailscale-style ranges, .local names,
+    and single-label intranet hosts are all allowed. Only URL syntax is enforced.
+
+    Set ``MCP_BROWSER_RESEARCH_STRICT_NETWORK=1`` to opt into the legacy network
+    restriction mode. In strict mode, ``MCP_BROWSER_RESEARCH_ALLOW_HOSTS`` can still
+    explicitly allow exact hosts or ``*.example.internal`` patterns.
+    """
+    parsed = urlsplit(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError("Expected an HTTP(S) URL without credentials.")
+
+    # Default mode intentionally trusts the operator of this on-demand, self-hosted
+    # MCP and permits direct access to local/LAN/private targets.
+    if not _strict_research_network_enabled():
+        return url
+
+    host = parsed.hostname.lower().rstrip(".")
+    if _host_is_explicitly_allowed(host):
+        return url
+    if host == "localhost" or host.endswith(".localhost") or host.endswith(".local") or "." not in host:
+        raise ValueError("Browser research tools may not access local or single-label hosts in strict network mode.")
+
+    try:
+        literal = ipaddress.ip_address(host)
+    except ValueError:
+        literal = None
+    if literal is not None:
+        if not literal.is_global:
+            raise ValueError("Browser research tools may not access non-global IP addresses in strict network mode.")
+        return url
+
+    if resolve_dns:
+        try:
+            infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise ValueError(f"Could not resolve research target host: {host}") from exc
+        addresses = {info[4][0] for info in infos if info[4]}
+        if not addresses:
+            raise ValueError(f"Could not resolve research target host: {host}")
+        fake_ip_v4 = ipaddress.ip_network("198.18.0.0/15")
+        for address in addresses:
+            try:
+                resolved = ipaddress.ip_address(address)
+            except ValueError:
+                continue
+            if isinstance(resolved, ipaddress.IPv4Address) and resolved in fake_ip_v4:
+                continue
+            if isinstance(resolved, ipaddress.IPv6Address):
+                embedded_v4 = int(resolved) & 0xffffffff
+                if int(fake_ip_v4.network_address) <= embedded_v4 <= int(fake_ip_v4.broadcast_address):
+                    continue
+            if not resolved.is_global:
+                raise ValueError(
+                    f"Browser research target {host} resolves to a non-global address in strict network mode; "
+                    "use MCP_BROWSER_RESEARCH_ALLOW_HOSTS to allow it explicitly."
+                )
+    return url
 
 
 def truncate_text(text: str, max_chars: int) -> tuple[str, bool]:

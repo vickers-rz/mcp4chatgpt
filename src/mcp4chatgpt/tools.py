@@ -14,13 +14,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import __version__
 from .audit import AuditLogger
 from .config import Config
-from . import chrome_ops, ext_ops, knowledge_ops, local_ops, terminal_ops, web_ops
+from . import chrome_ops, ext_ops, file_resources, knowledge_ops, local_ops, terminal_ops, web_ops
+from . import browser_search, web_archive
+from .mcp_types import RawMCPToolResult
 
 
 ToolHandler = Callable[[Config, dict[str, Any]], Any]
@@ -73,10 +76,16 @@ class Tool:
     description: str
     input_schema: dict[str, Any]
     handler: ToolHandler
+    annotations_override: dict[str, Any] | None = None
+    output_schema: dict[str, Any] | None = None
 
     def definition(self, *, auth_required: bool = True) -> dict[str, Any]:
         security_schemes = [{"type": "oauth2", "scopes": ["local", "web", "knowledge"]}]
-        annotations = _annotations_for_tool(self.name)
+        annotations = (
+            self.annotations_override
+            if self.annotations_override is not None
+            else _annotations_for_tool(self.name)
+        )
         title = self.name.replace("_", " ").title()
         definition = {
             "name": self.name,
@@ -91,6 +100,8 @@ class Tool:
             },
             "annotations": annotations,
         }
+        if self.output_schema is not None:
+            definition["outputSchema"] = self.output_schema
         if auth_required:
             definition["securitySchemes"] = security_schemes
             definition["_meta"]["securitySchemes"] = security_schemes
@@ -125,8 +136,14 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_click_element",
         "ext_fill_input",
         "ext_run_js",
+        "ext_start_js_job",
+        "ext_cancel_job",
+        "ext_search_web",
+        "ext_read_webpage",
+        "ext_web_rag",
+        "ext_archive_webpage",
     }
-    open_world = name.startswith("web_") or name == "search_web" or name in {
+    open_world = (name.startswith("web_") and not name.startswith("web_archive_")) or name in {"ext_search_web", "ext_read_webpage", "ext_web_rag", "ext_archive_webpage"} or name == "search_web" or name in {
         "local_run_command",
         "app_get_context",
         "app_write_text",
@@ -151,6 +168,10 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_click_element",
         "ext_fill_input",
         "ext_run_js",
+        "ext_start_js_job",
+        "ext_get_job",
+        "ext_get_job_result",
+        "ext_cancel_job",
         "ext_listen_changes",
     }
     destructive = name in {
@@ -164,6 +185,8 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_click_element",
         "ext_fill_input",
         "ext_run_js",
+        "ext_start_js_job",
+        "ext_cancel_job",
     }
     return {
         "readOnlyHint": name not in mutating,
@@ -177,6 +200,11 @@ def _ok(result: Any) -> dict[str, Any]:
     text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False, indent=2)
     structured_content = result if isinstance(result, dict) else {"result": result}
     return {"content": [{"type": "text", "text": text}], "structuredContent": structured_content}
+
+
+def _local_expose_file(config: Config, args: dict[str, Any]) -> RawMCPToolResult:
+    _record, result = file_resources.expose(config, args["path"])
+    return RawMCPToolResult(result)
 
 
 def _server_info(config: Config, _args: dict[str, Any]) -> dict[str, Any]:
@@ -203,11 +231,41 @@ def _web_add_to_knowledge(config: Config, args: dict[str, Any]) -> dict[str, Any
 def _search_web(config: Config, args: dict[str, Any]) -> dict[str, Any]:
     deep_read = bool(args.get("deep_read", False))
     result_count = int(args.get("result_count", 3))
+    backend = str(args.get("backend", "browser")).strip().lower()
+    if backend not in {"browser", "auto", "brave", "firecrawl"}:
+        raise ValueError("backend must be one of: browser, auto, brave, firecrawl")
+    browser_fallback_reason = None
+    if backend in {"browser", "auto"}:
+        try:
+            browser_result = browser_search.search(config, args["query"], result_count)
+            browser_items = browser_result.get("results", [])
+            if not browser_items:
+                raise RuntimeError(browser_result.get("message") or "Browser search returned no results.")
+            compact_results = []
+            for index, item in enumerate(browser_items[:result_count]):
+                compact = {
+                    "title": str(item.get("title", "")),
+                    "url": str(item.get("url", "")),
+                    "snippet": str(item.get("snippet", ""))[:2000],
+                    "source": "chrome_bing",
+                }
+                if deep_read and index < 2 and compact["url"]:
+                    try:
+                        page = browser_search.read(config, compact["url"], max_chars=8000)
+                        compact["page_text"] = str(page.get("text", ""))[:8000]
+                    except Exception as exc:
+                        compact["fetch_error"] = str(exc)[:500]
+                compact_results.append(compact)
+            return {"query": args["query"], "engine": "chrome_bing", "backend": "browser", "results": compact_results}
+        except Exception as exc:
+            if backend == "browser":
+                raise
+            browser_fallback_reason = str(exc)[:500]
     response = web_ops.combined_search(
         config,
         args["query"],
         result_count,
-        engine="auto",
+        engine="auto" if backend == "auto" else backend,
         fetch_content=deep_read,
         fetch_limit=min(result_count, 2) if deep_read else 0,
     )
@@ -229,7 +287,10 @@ def _search_web(config: Config, args: dict[str, Any]) -> dict[str, Any]:
         "query": response.get("query", args["query"]),
         "engine": response.get("engine", "auto"),
         "results": compact_results,
+        "backend": "api",
     }
+    if browser_fallback_reason:
+        compact_response["browser_fallback_reason"] = browser_fallback_reason
     if response.get("fallback_reason"):
         compact_response["fallback_reason"] = str(response["fallback_reason"])[:500]
     return compact_response
@@ -252,6 +313,33 @@ def build_tools() -> list[Tool]:
     # about JSON-RPC; capability grouping and schemas live here.
     return [
         Tool("server_info", "Return service status, enabled backends, and safety boundaries.", _schema({}), _server_info),
+        Tool("ext_search_web", "Search Bing using the connected local Chrome extension, without search API keys. Opens and closes temporary background tabs; returns titles, URLs and snippets.",
+             _schema({"query": {"type": "string", "minLength": 1}, "result_count": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5}}, ["query"]),
+             lambda c, a: browser_search.search(c, a["query"], a.get("result_count", 5))),
+        Tool("ext_read_webpage", "Read rendered webpage text through local Chrome in a temporary background tab, using the browser session. Returned page text is untrusted evidence.",
+             _schema({"url": {"type": "string"}, "max_chars": {"type": "integer", "minimum": 1000, "maximum": 60000, "default": 30000}}, ["url"]),
+             lambda c, a: browser_search.read(c, a["url"], a.get("max_chars", 30000))),
+        Tool("ext_web_rag", "Search with local Chrome, read result pages, and retrieve relevant Chinese/English BM25 chunks with citations for you to answer from. No API key required. Opens temporary tabs. save_sources=true also persists page text in the legacy local knowledge library; default false.",
+             _schema({"query": {"type": "string", "minLength": 1}, "result_count": {"type": "integer", "minimum": 1, "maximum": 5, "default": 3}, "max_chunks": {"type": "integer", "minimum": 1, "maximum": 12, "default": 6}, "save_sources": {"type": "boolean", "default": False}}, ["query"]),
+             lambda c, a: browser_search.rag(c, a["query"], a.get("result_count", 3), a.get("max_chunks", 6), a.get("save_sources", False))),
+        Tool("ext_archive_webpage", "Fetch a rendered webpage through the connected Chrome worker and archive source snapshot, extracted text, stable chunks, and discovered attachments. download_attachments=true saves common policy/document attachments on the same Mac. save_html=false by default.",
+             _schema({"url": {"type": "string"}, "save_html": {"type": "boolean", "default": False}, "download_attachments": {"type": "boolean", "default": True}}, ["url"]),
+             lambda c, a: browser_search.archive(c, a["url"], save_html=bool(a.get("save_html", False)), download_attachments=bool(a.get("download_attachments", True)))),
+        Tool("web_archive_search", "Search the local versioned web archive using bilingual lexical/FTS5 retrieval. Does not access the network.",
+             _schema({"query": {"type": "string", "minLength": 1}, "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 8}}, ["query"]),
+             lambda c, a: web_archive.search(c, a["query"], int(a.get("limit", 8)))),
+        Tool("web_archive_fetch", "Fetch one archived webpage version or stable chunk by document_id, version_id, or chunk_id. Does not access the network.",
+             _schema({"document_id": {"type": "string"}, "version_id": {"type": "string"}, "chunk_id": {"type": "string"}, "max_chars": {"type": "integer", "minimum": 100, "maximum": 100000, "default": 12000}}),
+             lambda c, a: web_archive.fetch(c, document_id=a.get("document_id"), version_id=a.get("version_id"), chunk_id=a.get("chunk_id"), max_chars=int(a.get("max_chars", 12000)))),
+        Tool("web_archive_versions", "List extraction versions for a document_id, newest first. Does not access the network.",
+             _schema({"document_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}}, ["document_id"]),
+             lambda c, a: web_archive.versions(c, a["document_id"], int(a.get("limit", 20)))),
+        Tool("web_archive_snapshots", "List source snapshots for a document_id and the extraction versions linked to each snapshot. Use this to distinguish source-page changes from extractor changes.",
+             _schema({"document_id": {"type": "string"}, "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20}}, ["document_id"]),
+             lambda c, a: web_archive.snapshots(c, a["document_id"], int(a.get("limit", 20)))),
+        Tool("web_archive_attachments", "List discovered/downloaded attachments for a source snapshot, or for a document's current snapshot. Does not access the network.",
+             _schema({"snapshot_id": {"type": "string"}, "document_id": {"type": "string"}}),
+             lambda c, a: web_archive.list_attachments(c, snapshot_id=a.get("snapshot_id"), document_id=a.get("document_id"))),
         Tool(
             "local_list_files",
             "List files in an allowed local directory.",
@@ -263,6 +351,12 @@ def build_tools() -> list[Tool]:
             "Read a UTF-8 text file from an allowed local path.",
             _schema({"path": {"type": "string"}, "max_chars": {"type": "integer"}}, ["path"]),
             lambda c, a: local_ops.read_text(c, a["path"], a.get("max_chars")),
+        ),
+        Tool(
+            "local_expose_file",
+            "Expose one allowed local file as an MCP resource_link so the client can read the original file bytes through resources/read. Use this for PDF, Word, Excel, images, archives, or any other file that should be analyzed directly by the client/model.",
+            _schema({"path": {"type": "string"}}, ["path"]),
+            _local_expose_file,
         ),
         Tool(
             "local_write_file",
@@ -440,7 +534,7 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "search_web",
-            "Search and analyze current web content. Use this single tool whenever the user asks to search online, look up current information, compare web sources, or provide cited web research. It automatically uses Brave first and falls back to Firecrawl. Set deep_read=true only when page-body analysis is necessary.",
+            "Search current web content. Defaults to the connected local Chrome extension and its network/session context. backend=auto permits fallback to Brave/Firecrawl and reports the reason; backend=brave or firecrawl selects that API explicitly. deep_read uses the browser for browser-backed searches.",
             _schema(
                 {
                     "query": {"type": "string", "description": "The web search query to run."},
@@ -454,8 +548,9 @@ def build_tools() -> list[Tool]:
                     "deep_read": {
                         "type": "boolean",
                         "default": False,
-                        "description": "Fetch up to two top result pages with Firecrawl for page-body analysis.",
+                        "description": "Fetch up to two top result pages using the selected search path.",
                     },
+                    "backend": {"type": "string", "enum": ["browser", "auto", "brave", "firecrawl"], "default": "browser"},
                 },
                 ["query"],
             ),
@@ -599,12 +694,14 @@ def build_tools() -> list[Tool]:
                 "code": {"type": "string"},
                 "tab_id": {"type": "integer"},
                 "max_chars": {"type": "integer", "default": 10000},
+                "timeout_sec": {"type": "integer", "default": 30, "minimum": 1, "maximum": 120},
             }, ["code"]),
             lambda c, a: ext_ops.ext_run_js(
                 c,
                 str(a["code"]),
                 a.get("tab_id"),
                 int(a.get("max_chars", 10000)),
+                int(a.get("timeout_sec", 30)),
             ),
         ),
         Tool(
@@ -623,19 +720,81 @@ def build_tools() -> list[Tool]:
     ]
 
 
+def _ext_async_jobs_enabled() -> bool:
+    return os.environ.get("MCP_EXT_ASYNC_JOBS_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
+def _build_ext_job_tools() -> list[Tool]:
+    return [
+        Tool(
+            "ext_start_js_job",
+            "Start an asynchronous checkpointed JavaScript job on one Chrome tab. The code must be a JavaScript function expression accepting (checkpoint, batchIndex) and returning a JSON object with done plus optional checkpoint, records, progress, counters, next_delay_ms, and final result. Each batch is bounded so one MCP request does not remain open for the full job lifetime.",
+            _schema({
+                "code": {"type": "string"},
+                "tab_id": {"type": "integer"},
+                "initial_checkpoint": {"description": "Any JSON-serializable checkpoint passed to the first batch."},
+                "max_batches": {"type": "integer", "default": 1000, "minimum": 1, "maximum": 10000},
+                "batch_timeout_sec": {"type": "number", "default": 20, "minimum": 1, "maximum": 25},
+            }, ["code"]),
+            lambda c, a: ext_ops.ext_start_js_job(
+                c,
+                str(a["code"]),
+                a.get("tab_id"),
+                a.get("initial_checkpoint"),
+                int(a.get("max_batches", 1000)),
+                float(a.get("batch_timeout_sec", 20)),
+            ),
+        ),
+        Tool(
+            "ext_get_job",
+            "Get status for an asynchronous Extension JavaScript job without returning its potentially large result payload.",
+            _schema({"job_id": {"type": "string"}}, ["job_id"]),
+            lambda c, a: ext_ops.ext_get_job(c, str(a["job_id"])),
+        ),
+        Tool(
+            "ext_get_job_result",
+            "Read a bounded chunk of records from an asynchronous Extension JavaScript job and return artifact metadata for larger results.",
+            _schema({
+                "job_id": {"type": "string"},
+                "cursor": {"type": "integer", "default": 0, "minimum": 0},
+                "limit": {"type": "integer", "default": 100, "minimum": 1, "maximum": 200},
+                "max_chars": {"type": "integer", "default": 20000, "minimum": 500, "maximum": 100000},
+            }, ["job_id"]),
+            lambda c, a: ext_ops.ext_get_job_result(
+                c,
+                str(a["job_id"]),
+                int(a.get("cursor", 0)),
+                int(a.get("limit", 100)),
+                int(a.get("max_chars", 20000)),
+            ),
+        ),
+        Tool(
+            "ext_cancel_job",
+            "Request cancellation of a queued or running asynchronous Extension JavaScript job. Cancellation takes effect no later than the end of the current bounded batch.",
+            _schema({"job_id": {"type": "string"}}, ["job_id"]),
+            lambda c, a: ext_ops.ext_cancel_job(c, str(a["job_id"])),
+        ),
+    ]
+
+
 class ToolRegistry:
     """工具目录及统一调用入口。
 
     注册表在启动时把工具列表索引为 ``name -> Tool``，使 ``tools/list`` 与
-    ``tools/call`` 使用同一份定义，避免“声明存在但无法执行”或反向漂移。
+    ``tools/call`` 使用同一份定义，避免"声明存在但无法执行"或反向漂移。
     所有调用都在这里记录成功/失败审计事件；异常不被吞掉，而是交给传输层转换为
     JSON-RPC error，保证客户端能区分正常工具结果与执行失败。
     """
 
-    def __init__(self, config: Config, audit: AuditLogger):
+    def __init__(self, config: Config, audit: AuditLogger, *, downstream_manager: Any | None = None):
         self.config = config
         self.audit = audit
+        self._downstream_manager = downstream_manager
         listed_tools = build_tools()
+        if _ext_async_jobs_enabled():
+            listed_tools = [*listed_tools, *_build_ext_job_tools()]
         self.tools = {tool.name: tool for tool in listed_tools}
         self.tools.update(
             {
@@ -694,34 +853,74 @@ class ToolRegistry:
             }
         )
         self._listed_tool_names = tuple(tool.name for tool in listed_tools)
-        self._listed_tool_name_set = frozenset(self._listed_tool_names)
-        self.toolset_hash = hashlib.sha256("\n".join(self._listed_tool_names).encode("utf-8")).hexdigest()
+
+        # Append downstream tool names (if any downstream manager is configured)
+        self._downstream_tool_names: tuple[str, ...] = ()
+        self._downstream_tool_channels: dict[str, str] = {}
+        if self._downstream_manager is not None:
+            ds_tools = self._downstream_manager.get_tools()
+            for ds_tool in ds_tools:
+                self.tools[ds_tool.namespaced_name] = Tool(
+                    name=ds_tool.namespaced_name,
+                    description=ds_tool.description,
+                    input_schema=ds_tool.input_schema,
+                    handler=self._make_downstream_handler(ds_tool.namespaced_name),
+                    # Downstream tools are open-world by definition. Preserve
+                    # their annotations when supplied, but never let missing
+                    # annotations be misclassified as a local read-only tool.
+                    annotations_override=(
+                        {
+                            "readOnlyHint": False,
+                            "destructiveHint": False,
+                            "idempotentHint": False,
+                            "openWorldHint": True,
+                            **(ds_tool.annotations or {}),
+                        }
+                    ),
+                    output_schema=ds_tool.output_schema,
+                )
+                self._downstream_tool_channels[ds_tool.namespaced_name] = ds_tool.downstream_id
+            self._downstream_tool_names = tuple(t.namespaced_name for t in ds_tools)
+
+        self._all_listed_names = self._listed_tool_names + self._downstream_tool_names
+        self._listed_tool_name_set = frozenset(self._all_listed_names)
+        self.toolset_hash = hashlib.sha256("\n".join(self._all_listed_names).encode("utf-8")).hexdigest()
         for name in self._listed_tool_names:
             self.tools[f"MCP4ChatGPT.{name}"] = self.tools[name]
+
+    def _make_downstream_handler(self, namespaced_name: str) -> ToolHandler:
+        """Create a handler that preserves downstream MCP content blocks verbatim."""
+        def _handler(config: Config, arguments: dict[str, Any]) -> Any:
+            result = self._downstream_manager.call_tool(namespaced_name, arguments)
+            if isinstance(result, dict):
+                return RawMCPToolResult(result)
+            return result
+        return _handler
 
     def list_tools(self, *, auth_required: bool) -> dict[str, Any]:
         return {
             "tools": [
                 self.tools[name].definition(auth_required=auth_required)
-                for name in self._listed_tool_names
+                for name in self._all_listed_names
             ]
         }
 
     def list_tool_resources(self) -> dict[str, Any]:
-        return {
-            "resources": [
-                {
-                    "uri": f"mcp4chatgpt://tools/{name}",
-                    "name": f"MCP4ChatGPT.{name}",
-                    "title": self.tools[name].definition(auth_required=False)["title"],
-                    "description": self.tools[name].description,
-                    "mimeType": "application/json",
-                }
-                for name in sorted(self._listed_tool_names)
-            ]
-        }
+        tool_resources = [
+            {
+                "uri": f"mcp4chatgpt://tools/{name}",
+                "name": f"MCP4ChatGPT.{name}",
+                "title": self.tools[name].definition(auth_required=False)["title"],
+                "description": self.tools[name].description,
+                "mimeType": "application/json",
+            }
+            for name in sorted(self._listed_tool_names)
+        ]
+        return {"resources": tool_resources + file_resources.list_resources()}
 
     def read_tool_resource(self, uri: str, *, auth_required: bool) -> dict[str, Any]:
+        if file_resources.is_file_resource_uri(uri):
+            return file_resources.read_resource(self.config, uri)
         prefix = "mcp4chatgpt://tools/"
         if uri.startswith(prefix):
             name = uri.removeprefix(prefix)
@@ -729,7 +928,7 @@ class ToolRegistry:
             name = uri.removeprefix("MCP4ChatGPT.")
         else:
             raise ValueError(f"Unknown resource: {uri}")
-        if name not in self._listed_tool_name_set:
+        if name not in frozenset(self._listed_tool_names):
             raise ValueError(f"Unknown tool resource: {uri}")
         return {
             "contents": [
@@ -745,13 +944,24 @@ class ToolRegistry:
         tool = self.tools.get(name)
         if not tool:
             raise ValueError(f"Unknown tool: {name}")
+        # Keep audit channel identity explicit without logging downstream
+        # response bodies. Extension tools remain distinguishable from native
+        # tools, and each downstream records its configured integration id.
+        if name in self._downstream_tool_names:
+            channel = self._downstream_tool_channels.get(name, "downstream")
+        elif name.startswith("ext_"):
+            channel = "extension"
+        else:
+            channel = "native"
         try:
             # Each subsystem returns native structured data; _ok wraps it in
             # MCP text content while preserving structuredContent for clients
             # that can use it.
             result = tool.handler(self.config, arguments or {})
-            self.audit.log("tool_call", tool=name, client_id=client_id, ok=True)
+            self.audit.log("tool_call", tool=name, client_id=client_id, ok=True, channel=channel)
+            if isinstance(result, RawMCPToolResult):
+                return result.value
             return _ok(result)
         except Exception as exc:
-            self.audit.log("tool_call", tool=name, client_id=client_id, ok=False, error=str(exc))
+            self.audit.log("tool_call", tool=name, client_id=client_id, ok=False, error=str(exc), channel=channel)
             raise

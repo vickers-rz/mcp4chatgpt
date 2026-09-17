@@ -14,16 +14,19 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
-import re
+import os
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .retrieval import lexical_terms
 from .safety import resolve_allowed_path, truncate_text
 
 SUPPORTED_EXTENSIONS = {".md", ".txt", ".json", ".csv"}
-WORD_RE = re.compile(r"[\w\u4e00-\u9fff]+", re.UNICODE)
+_STORE_LOCK = threading.RLock()
 
 
 def _store_path(config: Config) -> Path:
@@ -48,23 +51,41 @@ def _quarantine_corrupt_store(path: Path) -> None:
 
 def _load_store(config: Config) -> dict[str, Any]:
     path = _store_path(config)
-    if not path.exists():
-        return {"sources": {}}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
-        # Corrupted store is isolated before treating it as empty.
-        _quarantine_corrupt_store(path)
-        return {"sources": {}}
-    if not isinstance(data, dict) or not isinstance(data.get("sources"), dict):
-        _quarantine_corrupt_store(path)
-        return {"sources": {}}
-    return data
+    with _STORE_LOCK:
+        if not path.exists():
+            return {"sources": {}}
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+            # Corrupted store is isolated before treating it as empty.
+            _quarantine_corrupt_store(path)
+            return {"sources": {}}
+        if not isinstance(data, dict) or not isinstance(data.get("sources"), dict):
+            _quarantine_corrupt_store(path)
+            return {"sources": {}}
+        return data
 
 
 def _save_store(config: Config, store: dict[str, Any]) -> None:
     path = _store_path(config)
-    path.write_text(json.dumps(store, ensure_ascii=False, indent=2), encoding="utf-8")
+    payload = json.dumps(store, ensure_ascii=False, indent=2)
+    with _STORE_LOCK:
+        tmp_name: str | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+            ) as handle:
+                tmp_name = handle.name
+                handle.write(payload)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(tmp_name, path)
+        finally:
+            if tmp_name and os.path.exists(tmp_name):
+                try:
+                    os.unlink(tmp_name)
+                except OSError:
+                    pass
 
 
 def _read_source_file(path: Path) -> str:
@@ -101,7 +122,7 @@ def _chunk_text(text: str, chunk_chars: int = 1800, overlap: int = 200) -> list[
 
 
 def _tokens(text: str) -> set[str]:
-    return {m.group(0).lower() for m in WORD_RE.finditer(text)}
+    return set(lexical_terms(text))
 
 
 def add_source(
@@ -141,9 +162,10 @@ def add_source(
         "text": content,
         "chunks": chunks,
     }
-    store = _load_store(config)
-    store["sources"][source_id] = record
-    _save_store(config, store)
+    with _STORE_LOCK:
+        store = _load_store(config)
+        store["sources"][source_id] = record
+        _save_store(config, store)
     return {"source_id": source_id, "title": source_title, "chunks": len(chunks), "content_hash": digest}
 
 

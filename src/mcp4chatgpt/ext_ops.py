@@ -20,6 +20,7 @@ from typing import Any
 
 from . import ext_bridge
 from .config import Config
+from .ext_jobs import get_job_manager
 from .safety import redact, truncate_text
 
 
@@ -319,6 +320,7 @@ def ext_run_js(
     code: str,
     tab_id: int | None = None,
     max_chars: int = 10000,
+    timeout_sec: int = 30,
 ) -> dict[str, Any]:
     """Execute JavaScript in a Chrome tab and return the result.
 
@@ -331,10 +333,11 @@ def ext_run_js(
     if len(code) > 200_000:
         raise ValueError("JS code is too long (max 200,000 chars)")
     max_chars = max(100, min(max_chars, config.max_output_chars))
+    timeout_sec = max(1, min(int(timeout_sec), 120))
     args: dict[str, Any] = {"code": code}
     if tab_id is not None:
         args["tabId"] = tab_id
-    result = ext_bridge.send_command("run_js", args, timeout=30)
+    result = ext_bridge.send_command("run_js", args, timeout=timeout_sec)
 
     if error := result.get("error"):
         output = {
@@ -361,6 +364,61 @@ def ext_run_js(
         "type": result.get("resultType", "unknown"),
         "execution_world": result.get("executionWorld"),
     }
+
+
+# ---------------------------------------------------------------------------
+# Asynchronous / checkpointed JavaScript jobs
+# ---------------------------------------------------------------------------
+
+
+def ext_start_js_job(
+    config: Config,
+    code: str,
+    tab_id: int | None = None,
+    initial_checkpoint: Any = None,
+    max_batches: int = 1000,
+    batch_timeout_sec: float = 20.0,
+) -> dict[str, Any]:
+    """Start a checkpointed JS job and return immediately with a job id.
+
+    ``code`` must be a JavaScript function expression accepting
+    ``(checkpoint, batchIndex)``. Each bounded batch returns an object with at
+    least ``done`` and optionally ``checkpoint``, ``records``, ``progress``,
+    ``counters``, ``next_delay_ms`` and final ``result``.
+    """
+    return get_job_manager(config).start_js_job(
+        code=code,
+        tab_id=tab_id,
+        initial_checkpoint=initial_checkpoint,
+        max_batches=max_batches,
+        batch_timeout_sec=batch_timeout_sec,
+    )
+
+
+def ext_get_job(config: Config, job_id: str) -> dict[str, Any]:
+    """Return asynchronous Extension job status without returning its payload."""
+    return get_job_manager(config).get_job(job_id)
+
+
+def ext_get_job_result(
+    config: Config,
+    job_id: str,
+    cursor: int = 0,
+    limit: int = 100,
+    max_chars: int = 20000,
+) -> dict[str, Any]:
+    """Read a bounded chunk of job records plus final-result artifact metadata."""
+    return get_job_manager(config).get_job_result(
+        job_id,
+        cursor=cursor,
+        limit=limit,
+        max_chars=max_chars,
+    )
+
+
+def ext_cancel_job(config: Config, job_id: str) -> dict[str, Any]:
+    """Request cancellation of a queued/running Extension job."""
+    return get_job_manager(config).cancel_job(job_id)
 
 
 # ---------------------------------------------------------------------------
