@@ -626,7 +626,11 @@ def main() -> None:
         f"ext_bridge  listening on ws://127.0.0.1:{config.ext_bridge_port}  "
         f"(extension token: {token_hint[:8]}...)"
     )
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    finally:
+        from . import computer_backend
+        computer_backend.stop()
 
 
 if __name__ == "__main__":

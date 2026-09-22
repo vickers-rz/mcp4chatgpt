@@ -271,6 +271,25 @@ class TestStdioMCPClient:
         except ProcessLookupError:
             pass  # Good — process is gone
 
+    def test_graceful_shutdown_allows_eof_cleanup(self, tmp_path):
+        """EOF cleanup completes before process-group termination."""
+        marker = tmp_path / "eof-cleanup.txt"
+        client = StdioMCPClient(
+            downstream_id="test",
+            command=PYTHON,
+            args=[
+                FAKE_SERVER,
+                f"--eof-marker={marker}",
+                "--eof-delay=0.25",
+            ],
+            startup_timeout=10.0,
+            call_timeout=5.0,
+        )
+        client.start()
+        client.stop(timeout=5)
+
+        assert marker.read_text(encoding="utf-8") == "clean"
+
     def test_call_after_stop_raises(self):
         """Client raises after stop"""
         client = StdioMCPClient(

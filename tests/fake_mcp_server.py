@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
 _JSONRPC = "2.0"
@@ -125,6 +126,8 @@ def main() -> None:
     slow = 0.0
     tool_slow = 0.0
     exit_after = None
+    eof_marker = None
+    eof_delay = 0.0
 
     for arg in sys.argv[1:]:
         if arg.startswith("--slow="):
@@ -133,6 +136,10 @@ def main() -> None:
             tool_slow = float(arg.split("=", 1)[1])
         elif arg.startswith("--exit-after="):
             exit_after = int(arg.split("=", 1)[1])
+        elif arg.startswith("--eof-marker="):
+            eof_marker = arg.split("=", 1)[1]
+        elif arg.startswith("--eof-delay="):
+            eof_delay = float(arg.split("=", 1)[1])
 
     calls = 0
 
@@ -184,7 +191,11 @@ def main() -> None:
         elif request_id is not None:
             _error(request_id, -32601, f"Method not found: {method}")
 
-    # stdin closed — exit cleanly
+    # stdin closed — simulate stateful child cleanup before clean exit.
+    if eof_delay > 0:
+        time.sleep(eof_delay)
+    if eof_marker:
+        Path(eof_marker).write_text("clean", encoding="utf-8")
     sys.exit(0)
 
 

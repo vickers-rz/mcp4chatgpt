@@ -2,12 +2,16 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
-MCP_BIND_HOST="${MCP_BIND_HOST:-0.0.0.0}"
+MCP_BIND_HOST="${MCP_BIND_HOST:-127.0.0.1}"
 MCP_BIND_PORT="${MCP_BIND_PORT:-8766}"
-MCP_PUBLIC_BASE_URL="${MCP_PUBLIC_BASE_URL:-https://mcp.runzhe.uk}"
-MCP_EXTERNAL_TUNNEL="${MCP_EXTERNAL_TUNNEL:-1}"
+MCP_PUBLIC_BASE_URL="${MCP_PUBLIC_BASE_URL:-http://127.0.0.1:${MCP_BIND_PORT}}"
+MCP_EXTERNAL_TUNNEL="${MCP_EXTERNAL_TUNNEL:-0}"
 MCP_HEALTH_HOST="${MCP_HEALTH_HOST:-127.0.0.1}"
+MCP_COMPUTER_MODE="${MCP_COMPUTER_MODE:-off}"
+MCP_COMPUTER_ALLOWED_APPS="${MCP_COMPUTER_ALLOWED_APPS:-}"
+MCP_COMPUTER_BACKEND="${MCP_COMPUTER_BACKEND:-auto}"
 export MCP_BIND_HOST MCP_BIND_PORT MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL MCP_HEALTH_HOST
+export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND
 LOCAL_HEALTH=""
 PUBLIC_HEALTH="${MCP_PUBLIC_BASE_URL%/}/health"
 CONNECTOR_URL="${MCP_PUBLIC_BASE_URL%/}/mcp"
@@ -41,9 +45,12 @@ usage() {
 MCP4ChatGPT control
 
 Usage:
-  ./MCP4ChatGPT.command start       Start MCP service and optional Cloudflare Tunnel
+  ./MCP4ChatGPT.command start       Start with safe local defaults
+  ./MCP4ChatGPT.command start-full  Start explicit full-access self-use profile
   ./MCP4ChatGPT.command stop        Stop MCP service and optional Cloudflare Tunnel
-  ./MCP4ChatGPT.command restart     Stop then start both
+  ./MCP4ChatGPT.command restart     Restart with safe local defaults
+  ./MCP4ChatGPT.command restart-full
+                                    Restart explicit full-access self-use profile
   ./MCP4ChatGPT.command clean-restart
                                     Stop, clean Codex/co-te helpers, then start
   ./MCP4ChatGPT.command status      Show process and health status
@@ -149,6 +156,31 @@ status() {
 
   echo "Connector URL: $CONNECTOR_URL"
   echo "Bind host: $MCP_BIND_HOST"
+}
+
+enable_full_access_profile() {
+  MCP_BIND_HOST="${MCP_FULL_BIND_HOST:-0.0.0.0}"
+  MCP_PUBLIC_BASE_URL="${MCP_FULL_PUBLIC_BASE_URL:-https://mcp.runzhe.uk}"
+  MCP_EXTERNAL_TUNNEL="${MCP_FULL_EXTERNAL_TUNNEL:-1}"
+  MCP_COMPUTER_MODE="${MCP_FULL_COMPUTER_MODE:-interact}"
+  MCP_COMPUTER_ALLOWED_APPS="${MCP_FULL_COMPUTER_ALLOWED_APPS:-*}"
+  MCP_COMPUTER_BACKEND="${MCP_FULL_COMPUTER_BACKEND:-auto}"
+  export MCP_BIND_HOST MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL
+  export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND
+  LOCAL_HEALTH="http://$(health_host):${MCP_BIND_PORT}/health"
+  PUBLIC_HEALTH="${MCP_PUBLIC_BASE_URL%/}/health"
+  CONNECTOR_URL="${MCP_PUBLIC_BASE_URL%/}/mcp"
+}
+
+start_full_access() {
+  enable_full_access_profile
+  start_all
+}
+
+restart_full_access() {
+  enable_full_access_profile
+  stop_all
+  start_all
 }
 
 start_all() {
@@ -293,6 +325,8 @@ Choose an action:
   8) Audit Codex/co-te helpers
   9) Clean-restart MCP and helpers
   10) Print Connector URL
+  11) Start full-access self-use profile
+  12) Restart full-access self-use profile
   q) Quit
 EOF
     printf "> "
@@ -309,6 +343,8 @@ EOF
       8) cleanup_helpers; action_status=$? ;;
       9) clean_restart_all; action_status=$? ;;
       10) echo "$CONNECTOR_URL"; action_status=$? ;;
+      11) start_full_access; action_status=$? ;;
+      12) restart_full_access; action_status=$? ;;
       q|Q) exit 0 ;;
       *) echo "Unknown choice: $choice"; action_status=2 ;;
     esac
@@ -326,8 +362,10 @@ EOF
 cmd="${1:-menu}"
 case "$cmd" in
   start) start_all ;;
+  start-full|full-start) start_full_access ;;
   stop) stop_all ;;
   restart) restart_all ;;
+  restart-full|full-restart) restart_full_access ;;
   clean-restart|restart-clean) clean_restart_all ;;
   status) status ;;
   check) check_all ;;

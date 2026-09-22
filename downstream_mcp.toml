@@ -30,6 +30,21 @@ call_timeout = 60.0
 # allow_tools = ["list_pages", "select_page", "evaluate_script"]
 # deny_tools = []
 
+# ── Persistent headless Chrome ───────────────────────────────────
+# This is intentionally separate from chrome_devtools above:
+# - chrome_devtools attaches to the user's already-running daily Chrome.
+# - chrome_headless owns a Chrome instance and persists its browser profile
+#   across MCP/server restarts. Give it a dedicated profile so it cannot
+#   collide with other chrome-devtools-mcp instances using the default.
+[downstream_mcp.chrome_headless]
+enabled = true
+transport = "stdio"
+command = "/opt/homebrew/bin/npx"
+args = ["-y", "chrome-devtools-mcp@1.9.0", "--headless", "--viewport", "1440x900", "--userDataDir", "/Users/vickers/Library/Application Support/MCP4ChatGPT/chrome-headless-profile"]
+startup_timeout = 30.0
+call_timeout = 60.0
+namespace = "chrome_headless"
+
 [downstream_mcp.wps]
 enabled = true
 transport = "stdio"

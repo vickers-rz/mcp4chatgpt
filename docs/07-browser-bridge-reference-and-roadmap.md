@@ -420,3 +420,15 @@ The highest-value next implementation is Phase 1:
 
 This gives ChatGPT real Chrome tab context without committing yet to a native
 host installer.
+
+## Operational Notes
+
+For the verified handling path used when reading ChatGPT shared-conversation URLs,
+including the fallback from `ext_read_webpage` to narrowly scoped React Router
+hydration extraction for `/share/<uuid>` pages, see:
+
+- `docs/08-chatgpt-share-link-reading.md`
+
+That note also records the security requirement to avoid dumping full ChatGPT
+hydration state because unrelated logged-in session/account data may be present in
+the same page script.

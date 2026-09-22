@@ -70,6 +70,9 @@ class Config:
     modern_protocol_enabled: bool
     ext_bridge_port: int
     ext_screenshot_dir: Path
+    computer_mode: str = "off"
+    computer_allowed_apps: tuple[str, ...] = ()
+    computer_backend: str = "native"
 
     @property
     def mcp_url(self) -> str:
@@ -108,6 +111,17 @@ def load_config() -> Config:
     ext_screenshot_dir = Path(
         os.environ.get("EXT_SCREENSHOT_DIR", data_dir / "screenshots")
     ).expanduser().resolve()
+    computer_mode = os.environ.get("MCP_COMPUTER_MODE", "off").strip().lower()
+    if computer_mode not in {"off", "observe", "interact"}:
+        raise ValueError("MCP_COMPUTER_MODE must be off, observe, or interact")
+    computer_allowed_apps = tuple(dict.fromkeys(
+        app.strip() for app in os.environ.get("MCP_COMPUTER_ALLOWED_APPS", "").split(",") if app.strip()
+    ))
+    if computer_mode != "off" and not computer_allowed_apps:
+        raise ValueError("MCP_COMPUTER_ALLOWED_APPS is required when computer mode is enabled")
+    computer_backend = os.environ.get("MCP_COMPUTER_BACKEND", "auto").strip().lower()
+    if computer_backend not in {"auto", "cua", "native"}:
+        raise ValueError("MCP_COMPUTER_BACKEND must be auto, cua, or native")
 
     return Config(
         public_base_url=public_base_url,
@@ -136,4 +150,7 @@ def load_config() -> Config:
         in {"1", "true", "yes", "on"},
         ext_bridge_port=int(os.environ.get("EXT_BRIDGE_PORT", "8765")),
         ext_screenshot_dir=ext_screenshot_dir,
+        computer_mode=computer_mode,
+        computer_allowed_apps=computer_allowed_apps,
+        computer_backend=computer_backend,
     )

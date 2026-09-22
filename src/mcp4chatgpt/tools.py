@@ -15,13 +15,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import platform
 from dataclasses import dataclass
 from typing import Any, Callable
 
 from . import __version__
 from .audit import AuditLogger
 from .config import Config
-from . import chrome_ops, ext_ops, file_resources, knowledge_ops, local_ops, terminal_ops, web_ops
+from . import chrome_ops, computer_ops, ext_ops, file_resources, knowledge_ops, local_ops, terminal_ops, web_ops
 from . import browser_search, web_archive
 from .mcp_types import RawMCPToolResult
 
@@ -124,9 +125,12 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
     allowlists, command blocking, and audit logging independently.
     """
     mutating = {
+        "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_request_permissions", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
         "local_apply_patch",
         "local_run_command",
+        "local_start_job",
+        "local_cancel_job",
         "app_write_text",
         "terminal_run_command",
         "terminal_send_input",
@@ -144,7 +148,9 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_archive_webpage",
     }
     open_world = (name.startswith("web_") and not name.startswith("web_archive_")) or name in {"ext_search_web", "ext_read_webpage", "ext_web_rag", "ext_archive_webpage"} or name == "search_web" or name in {
+        "computer_list_apps", "computer_get_state", "computer_screenshot", "computer_list_displays", "computer_screenshot_display", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll", "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard",
         "local_run_command",
+        "local_start_job",
         "app_get_context",
         "app_write_text",
         "terminal_run_command",
@@ -175,9 +181,12 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_listen_changes",
     }
     destructive = name in {
+        "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
         "local_apply_patch",
         "local_run_command",
+        "local_start_job",
+        "local_cancel_job",
         "app_write_text",
         "terminal_run_command",
         "terminal_send_input",
@@ -188,11 +197,12 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_start_js_job",
         "ext_cancel_job",
     }
+    protocol_idempotent = name in {"local_start_job", "local_cancel_job"}
     return {
         "readOnlyHint": name not in mutating,
         "destructiveHint": destructive,
         "openWorldHint": open_world,
-        "idempotentHint": name not in mutating,
+        "idempotentHint": name not in mutating or protocol_idempotent,
     }
 
 
@@ -216,6 +226,12 @@ def _server_info(config: Config, _args: dict[str, Any]) -> dict[str, Any]:
         "knowledge_store_dir": str(config.knowledge_store_dir),
         "firecrawl_configured": bool(config.firecrawl_api_key),
         "co_te_path": str(config.co_te_path),
+        "computer": {
+            "mode": config.computer_mode,
+            "backend": getattr(config, "computer_backend", "native"),
+            "allowed_apps": list(config.computer_allowed_apps),
+            "platform": platform.system(),
+        },
     }
 
 
@@ -308,11 +324,28 @@ def _web_search_auto_compat(config: Config, args: dict[str, Any]) -> dict[str, A
     )
 
 
-def build_tools() -> list[Tool]:
+def build_tools(*, computer_mode: str = "off") -> list[Tool]:
     # The tool list is intentionally centralized. The HTTP layer only knows
     # about JSON-RPC; capability grouping and schemas live here.
-    return [
+    tools = [
         Tool("server_info", "Return service status, enabled backends, and safety boundaries.", _schema({}), _server_info),
+        Tool("computer_permissions", "Return current macOS Accessibility, Screen Recording, and event-posting permission status for native Computer Use.", _schema({}), lambda c, a: computer_ops.permission_status(c)),
+        Tool("computer_request_permissions", "Request macOS native Computer Use permissions. This may trigger system permission prompts; a process restart can still be required after approval.", _schema({"accessibility": {"type": "boolean", "default": True}, "screen_recording": {"type": "boolean", "default": True}, "event_posting": {"type": "boolean", "default": True}}), lambda c, a: computer_ops.request_permissions(c, accessibility=bool(a.get("accessibility", True)), screen_recording=bool(a.get("screen_recording", True)), event_posting=bool(a.get("event_posting", True)))),
+        Tool("computer_list_apps", "List running macOS apps in the explicit computer allowlist. In auto mode OpenAI CUA/Sky is the primary inventory source.", _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 64, "default": 32}}), lambda c, a: computer_ops.list_apps(c, int(a.get("limit", 32)))),
+        Tool("computer_get_state", "Inspect one allowlisted macOS app window and its bounded Accessibility tree. In auto mode OpenAI CUA/Sky is preferred while native WindowServer/AX inventory supplies exact multi-window identity. If the app has multiple eligible windows and window_id is omitted, returns window_selection_required with stable CUA window tokens; select one and observe again. Background selection does not make the target app frontmost. Refresh after each action.", _schema({"app_id": {"type": "string"}, "pid": {"type": "integer", "minimum": 1, "description": "Exact process from computer_list_apps. Supplying pid deliberately uses the native identity-fenced path."}, "window_id": {"type": "string", "description": "Opaque window token returned by computer_get_state. CUA tokens are bound to the target process and WindowServer window identity."}, "max_elements": {"type": "integer", "minimum": 1, "maximum": 400, "default": 200}}, ["app_id"]), lambda c, a: computer_ops.get_state(c, a["app_id"], a.get("window_id"), int(a.get("max_elements", 200)), a.get("pid"))),
+        Tool("computer_screenshot", "Capture an exact allowlisted app window as an MCP image. For a CUA window token, the adapter rebinds and verifies the same WindowServer/AX window in the background before Sky capture; stale or mismatched windows fail closed. Native capture remains the fallback for native-bound windows.", _schema({"app_id": {"type": "string"}, "pid": {"type": "integer", "minimum": 1, "description": "Exact process from computer_list_apps; supplying pid uses the native path."}, "window_id": {"type": "string", "description": "Exact opaque window token returned by computer_get_state."}}, ["app_id", "window_id"]), lambda c, a: computer_ops.screenshot(c, a["app_id"], a["window_id"], a.get("pid"))),
+        Tool("computer_list_displays", "List active macOS displays for full-desktop Computer Use. Requires MCP_COMPUTER_ALLOWED_APPS=*.", _schema({}), lambda c, a: computer_ops.list_displays(c)),
+        Tool("computer_screenshot_display", "Capture one active display. Returns source pixel dimensions plus a one-effect display_snapshot_id for pointer actions.", _schema({"display_id": {"type": "string"}}, ["display_id"]), lambda c, a: computer_ops.screenshot_display(c, a["display_id"])),
+        Tool("computer_launch_app", "Launch or bind an allowlisted macOS application. CUA/Sky is preferred and can launch the app in the background; the native helper is fallback.", _schema({"app_id": {"type": "string"}}, ["app_id"]), lambda c, a: computer_ops.launch_app(c, a["app_id"])),
+        Tool("computer_activate_window", "Bring an allowlisted app window to the foreground and verify it became the focused window.", _schema({"app_id": {"type": "string"}, "pid": {"type": "integer", "minimum": 1}, "window_id": {"type": "string"}}, ["app_id", "window_id"]), lambda c, a: computer_ops.activate_window(c, a)),
+        Tool("computer_pointer_move", "Move the macOS pointer to source-pixel coordinates from a fresh computer_screenshot_display. The display snapshot is consumed once.", _schema({"display_id": {"type": "string"}, "display_snapshot_id": {"type": "string"}, "x": {"type": "integer", "minimum": 0}, "y": {"type": "integer", "minimum": 0}}, ["display_id", "display_snapshot_id", "x", "y"]), lambda c, a: computer_ops.pointer_move(c, a)),
+        Tool("computer_pointer_click", "Move and click at source-pixel coordinates from a fresh computer_screenshot_display. Supports left/right click and single/double click; the display snapshot is consumed once.", _schema({"display_id": {"type": "string"}, "display_snapshot_id": {"type": "string"}, "x": {"type": "integer", "minimum": 0}, "y": {"type": "integer", "minimum": 0}, "button": {"type": "string", "enum": ["left", "right"], "default": "left"}, "click_count": {"type": "integer", "enum": [1, 2], "default": 1}}, ["display_id", "display_snapshot_id", "x", "y"]), lambda c, a: computer_ops.pointer_click(c, a)),
+        Tool("computer_pointer_drag", "Drag with the left mouse button between source-pixel coordinates from a fresh display screenshot. The display snapshot is consumed once.", _schema({"display_id": {"type": "string"}, "display_snapshot_id": {"type": "string"}, "from_x": {"type": "integer", "minimum": 0}, "from_y": {"type": "integer", "minimum": 0}, "to_x": {"type": "integer", "minimum": 0}, "to_y": {"type": "integer", "minimum": 0}}, ["display_id", "display_snapshot_id", "from_x", "from_y", "to_x", "to_y"]), lambda c, a: computer_ops.pointer_drag(c, a)),
+        Tool("computer_pointer_scroll", "Scroll at source-pixel coordinates from a fresh display screenshot. Positive/negative deltas select direction; the display snapshot is consumed once.", _schema({"display_id": {"type": "string"}, "display_snapshot_id": {"type": "string"}, "x": {"type": "integer", "minimum": 0}, "y": {"type": "integer", "minimum": 0}, "delta_y": {"type": "integer", "minimum": -120, "maximum": 120}, "delta_x": {"type": "integer", "minimum": -120, "maximum": 120, "default": 0}}, ["display_id", "display_snapshot_id", "x", "y", "delta_y"]), lambda c, a: computer_ops.pointer_scroll(c, a)),
+        Tool("computer_click", "Click a fresh observed element. CUA/Sky is preferred for CUA snapshots so the target can stay in the background without moving the user's physical pointer; observe again afterward.", _schema({"app_id": {"type": "string"}, "pid": {"type": "integer", "minimum": 1, "description": "Exact process from computer_list_apps; required to disambiguate multiple instances."}, "window_id": {"type": "string"}, "snapshot_id": {"type": "string"}, "element_id": {"type": "string"}}, ["app_id", "window_id", "snapshot_id", "element_id"]), lambda c, a: computer_ops.click(c, a)),
+        Tool("computer_press_key", "Send one key or shortcut chord to the observed app. CUA/Sky is preferred for CUA snapshots so the target can remain in the background; native Quartz is fallback.", _schema({"app_id": {"type": "string"}, "pid": {"type": "integer", "minimum": 1, "description": "Exact process from computer_list_apps; required to disambiguate multiple instances."}, "window_id": {"type": "string"}, "snapshot_id": {"type": "string"}, "key": {"type": "string", "enum": ["A","B","C","D","E","F","G","H","I","J","K","L","M","N","O","P","Q","R","S","T","U","V","W","X","Y","Z","0","1","2","3","4","5","6","7","8","9","Return","Tab","Escape","Left","Right","Up","Down","Backspace","Space","DeleteForward","Home","End","PageUp","PageDown"]}, "modifiers": {"type": "array", "items": {"type": "string", "enum": ["shift", "option", "control", "command"]}, "maxItems": 4}}, ["app_id", "window_id", "snapshot_id", "key"]), lambda c, a: computer_ops.press_key(c, a)),
+        Tool("computer_type_text", "Replace the value of a fresh observed writable text element. CUA setValue is preferred for CUA snapshots; native AXValue is fallback.", _schema({"app_id": {"type": "string"}, "pid": {"type": "integer", "minimum": 1, "description": "Exact process from computer_list_apps; required to disambiguate multiple instances."}, "window_id": {"type": "string"}, "snapshot_id": {"type": "string"}, "element_id": {"type": "string"}, "text": {"type": "string", "maxLength": 20000}, "mode": {"type": "string", "enum": ["replace_value"], "default": "replace_value"}}, ["app_id", "window_id", "snapshot_id", "element_id", "text"]), lambda c, a: computer_ops.type_text(c, a)),
+        Tool("computer_type_keyboard", "Enter Unicode text into the observed control. For CUA snapshots this uses OpenAI Sky background paste, preserving the user's physical pointer/keyboard and restoring the macOS pasteboard; native Quartz Unicode is fallback.", _schema({"app_id": {"type": "string"}, "pid": {"type": "integer", "minimum": 1}, "window_id": {"type": "string"}, "snapshot_id": {"type": "string"}, "text": {"type": "string", "minLength": 1, "maxLength": 4000}}, ["app_id", "window_id", "snapshot_id", "text"]), lambda c, a: computer_ops.type_keyboard(c, a)),
         Tool("ext_search_web", "Search Bing using the connected local Chrome extension, without search API keys. Opens and closes temporary background tabs; returns titles, URLs and snippets.",
              _schema({"query": {"type": "string", "minLength": 1}, "result_count": {"type": "integer", "minimum": 1, "maximum": 10, "default": 5}}, ["query"]),
              lambda c, a: browser_search.search(c, a["query"], a.get("result_count", 5))),
@@ -348,7 +381,7 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "local_read_text",
-            "Read a UTF-8 text file from an allowed local path.",
+            "Read a UTF-8 text file from an allowed local path. A complete, non-truncated, lossless and unredacted read also returns a full_replace_token that authorizes whole-file replacement of exactly that observed version.",
             _schema({"path": {"type": "string"}, "max_chars": {"type": "integer"}}, ["path"]),
             lambda c, a: local_ops.read_text(c, a["path"], a.get("max_chars")),
         ),
@@ -360,20 +393,120 @@ def build_tools() -> list[Tool]:
         ),
         Tool(
             "local_write_file",
-            "Write a UTF-8 file under MCP_ALLOWED_ROOTS.",
-            _schema({"path": {"type": "string"}, "content": {"type": "string"}, "overwrite": {"type": "boolean", "default": False}}, ["path", "content"]),
-            lambda c, a: local_ops.write_file(c, a["path"], a["content"], bool(a.get("overwrite", False))),
+            "Transactionally create or replace a UTF-8 file under MCP_ALLOWED_ROOTS. Replacing an existing file requires both expected_sha256 and full_replace_token from a complete local_read_text result; truncated/partial reads cannot authorize whole-file replacement. Existing contents are recovery-pinned in Git when possible and the final replacement is atomic.",
+            _schema(
+                {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                    "overwrite": {"type": "boolean", "default": False},
+                    "expected_sha256": {"type": "string"},
+                    "full_replace_token": {"type": "string"},
+                    "allow_large_reduction": {"type": "boolean", "default": False},
+                },
+                ["path", "content"],
+            ),
+            lambda c, a: local_ops.write_file(
+                c,
+                a["path"],
+                a["content"],
+                bool(a.get("overwrite", False)),
+                a.get("expected_sha256"),
+                a.get("full_replace_token"),
+                bool(a.get("allow_large_reduction", False)),
+            ),
         ),
         Tool(
             "local_apply_patch",
-            "Replace one exact text block in an allowed file and return a unified diff.",
-            _schema({"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}}, ["path", "old", "new"]),
-            lambda c, a: local_ops.apply_patch(c, a["path"], a["old"], a["new"]),
+            "Transactionally replace one exact text block in an allowed file and return a unified diff. Pass expected_sha256 from local_read_text for compare-and-swap protection.",
+            _schema(
+                {
+                    "path": {"type": "string"},
+                    "old": {"type": "string"},
+                    "new": {"type": "string"},
+                    "expected_sha256": {"type": "string"},
+                },
+                ["path", "old", "new"],
+            ),
+            lambda c, a: local_ops.apply_patch(
+                c,
+                a["path"],
+                a["old"],
+                a["new"],
+                a.get("expected_sha256"),
+            ),
+        ),
+        Tool(
+            "local_start_job",
+            "Start a durable local shell job exactly once for one operation_id and request fingerprint. Replaying the same operation_id with the same request returns the existing job without spawning again; a different request returns idempotency_conflict.",
+            _schema(
+                {
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "command": {"type": "string"},
+                    "cwd": {"type": "string"},
+                    "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 86400, "default": 900},
+                },
+                ["operation_id", "command"],
+            ),
+            lambda c, a: local_ops.start_job(
+                c,
+                a["operation_id"],
+                a["command"],
+                a.get("cwd"),
+                int(a.get("timeout_sec", 900)),
+            ),
+        ),
+        Tool(
+            "local_job_status",
+            "Observe durable local job state and process liveness. Observation-only: never starts, retries, cancels, or repairs a job.",
+            _schema({"job_id": {"type": "string"}}, ["job_id"]),
+            lambda c, a: local_ops.job_status(c, a["job_id"]),
+        ),
+        Tool(
+            "local_job_logs",
+            "Read retained stdout/stderr from explicit byte cursors. Observation-only and safe to replay.",
+            _schema(
+                {
+                    "job_id": {"type": "string"},
+                    "stdout_offset": {"type": "integer", "minimum": 0, "default": 0},
+                    "stderr_offset": {"type": "integer", "minimum": 0, "default": 0},
+                    "max_bytes": {"type": "integer", "minimum": 1, "maximum": 1000000, "default": 16384},
+                },
+                ["job_id"],
+            ),
+            lambda c, a: local_ops.job_logs(
+                c,
+                a["job_id"],
+                int(a.get("stdout_offset", 0)),
+                int(a.get("stderr_offset", 0)),
+                int(a.get("max_bytes", 16384)),
+            ),
+        ),
+        Tool(
+            "local_list_jobs",
+            "List durable local jobs from persisted metadata without starting or changing them.",
+            _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}}),
+            lambda c, a: local_ops.list_jobs(c, int(a.get("limit", 50))),
+        ),
+        Tool(
+            "local_cancel_job",
+            "Explicitly cancel one durable local job. Repeated cancellation of an already-terminal job is a no-op.",
+            _schema(
+                {
+                    "job_id": {"type": "string"},
+                    "grace_sec": {"type": "number", "minimum": 0, "maximum": 10, "default": 2},
+                },
+                ["job_id"],
+            ),
+            lambda c, a: local_ops.cancel_job(
+                c,
+                a["job_id"],
+                float(a.get("grace_sec", 2)),
+            ),
         ),
         Tool(
             "local_run_command",
-            "Run a non-dangerous shell command in an allowed cwd, returning stdout/stderr and writing a local execution log.",
-            _schema({"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout_sec": {"type": "integer", "default": 30}}, ["command"]),
+            "Run a non-dangerous shell command synchronously in an allowed cwd and record it in the local execution log. Prefer local_start_job for work that may outlive the tool-call timeout.",
+            _schema({"command": {"type": "string"}, "cwd": {"type": "string"}, "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 30, "default": 30}}, ["command"]),
             lambda c, a: local_ops.run_command(c, a["command"], a.get("cwd"), int(a.get("timeout_sec", 30))),
         ),
         Tool(
@@ -718,6 +851,11 @@ def build_tools() -> list[Tool]:
             ),
         ),
     ]
+    if computer_mode == "interact":
+        return tools
+    if computer_mode == "observe":
+        return [tool for tool in tools if tool.name not in {"computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll"}]
+    return [tool for tool in tools if not tool.name.startswith("computer_")]
 
 
 def _ext_async_jobs_enabled() -> bool:
@@ -792,7 +930,7 @@ class ToolRegistry:
         self.config = config
         self.audit = audit
         self._downstream_manager = downstream_manager
-        listed_tools = build_tools()
+        listed_tools = build_tools(computer_mode=getattr(config, "computer_mode", "off"))
         if _ext_async_jobs_enabled():
             listed_tools = [*listed_tools, *_build_ext_job_tools()]
         self.tools = {tool.name: tool for tool in listed_tools}
@@ -958,7 +1096,17 @@ class ToolRegistry:
             # MCP text content while preserving structuredContent for clients
             # that can use it.
             result = tool.handler(self.config, arguments or {})
-            self.audit.log("tool_call", tool=name, client_id=client_id, ok=True, channel=channel)
+            audit_fields: dict[str, Any] = {}
+            audit_ok = True
+            if name.startswith("computer_"):
+                outcome = result.value.get("structuredContent", {}) if isinstance(result, RawMCPToolResult) else result
+                if isinstance(outcome, dict):
+                    audit_ok = outcome.get("success") is not False
+                    if outcome.get("effect") in {"completed", "not_started", "outcome_unknown"}:
+                        audit_fields["effect"] = outcome["effect"]
+                    if not audit_ok:
+                        audit_fields["error"] = outcome.get("error", "computer_failed")
+            self.audit.log("tool_call", tool=name, client_id=client_id, ok=audit_ok, channel=channel, **audit_fields)
             if isinstance(result, RawMCPToolResult):
                 return result.value
             return _ok(result)

@@ -10,7 +10,6 @@
 
 from __future__ import annotations
 
-import difflib
 import json
 import os
 import signal
@@ -22,7 +21,9 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .jobs import manager as job_manager
 from .safety import redact, resolve_allowed_path, truncate_text, validate_command
+from .workspace import recovery, transactions, versioning
 
 
 def _command_log_path(config: Config) -> Path:
@@ -81,7 +82,13 @@ def _command_log_record(
 
 
 def _clamp_timeout(timeout_sec: int) -> int:
-    return max(1, min(timeout_sec, 300))
+    timeout_sec = int(timeout_sec)
+    if timeout_sec > 30:
+        raise ValueError(
+            "long_command_requires_job: synchronous local_run_command is limited "
+            "to 30 seconds; use local_start_job for longer work"
+        )
+    return max(1, timeout_sec)
 
 
 def _kill_process_group(proc: subprocess.Popen[str], grace_sec: float = 2.0) -> None:
@@ -177,39 +184,146 @@ def read_text(config: Config, path: str, max_chars: int | None = None) -> dict[s
     target = resolve_allowed_path(path, config.allowed_roots, must_exist=True)
     if not target.is_file():
         raise ValueError(f"Not a file: {target}")
-    text = target.read_text(encoding="utf-8", errors="replace")
-    text, truncated = truncate_text(redact(text), max_chars or config.max_output_chars)
-    return {"path": str(target), "text": text, "truncated": truncated}
 
+    raw = target.read_bytes()
+    sha256 = recovery.sha256_bytes(raw)
+    try:
+        decoded = raw.decode("utf-8")
+        utf8_lossless = True
+    except UnicodeDecodeError:
+        decoded = raw.decode("utf-8", errors="replace")
+        utf8_lossless = False
 
-def write_file(config: Config, path: str, content: str, overwrite: bool = False) -> dict[str, Any]:
-    target = resolve_allowed_path(path, config.allowed_roots, must_exist=False)
-    if target.exists() and not overwrite:
-        raise ValueError(f"Refusing to overwrite existing file without overwrite=true: {target}")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content, encoding="utf-8")
-    return {"path": str(target), "bytes": len(content.encode("utf-8"))}
-
-
-def apply_patch(config: Config, path: str, old: str, new: str) -> dict[str, Any]:
-    target = resolve_allowed_path(path, config.allowed_roots, must_exist=True)
-    if not target.is_file():
-        raise ValueError(f"Not a file: {target}")
-    original = target.read_text(encoding="utf-8")
-    if old not in original:
-        raise ValueError("Patch anchor text was not found.")
-    updated = original.replace(old, new, 1)
-    target.write_text(updated, encoding="utf-8")
-    diff = "".join(
-        difflib.unified_diff(
-            original.splitlines(keepends=True),
-            updated.splitlines(keepends=True),
-            fromfile=str(target),
-            tofile=str(target),
-        )
+    redacted_text = redact(decoded)
+    visible_text, truncated = truncate_text(
+        redacted_text,
+        max_chars if max_chars is not None else config.max_output_chars,
     )
-    diff, truncated = truncate_text(diff, config.max_output_chars)
-    return {"path": str(target), "diff": diff, "truncated": truncated}
+
+    blocked_reason = None
+    if truncated:
+        blocked_reason = "truncated"
+    elif not utf8_lossless:
+        blocked_reason = "invalid_utf8"
+    elif redacted_text != decoded:
+        blocked_reason = "redacted"
+
+    replace_proof = None
+    if blocked_reason is None:
+        key = versioning.load_or_create_key(config.audit_log.parent)
+        replace_proof = versioning.full_replace_token(
+            key,
+            target=target,
+            sha256=sha256,
+            size=len(raw),
+        )
+
+    return {
+        "path": str(target),
+        "text": visible_text,
+        "truncated": truncated,
+        "sha256": sha256,
+        "bytes": len(raw),
+        "full_replace_eligible": replace_proof is not None,
+        "full_replace_token": replace_proof,
+        "full_replace_blocked_reason": blocked_reason,
+    }
+
+
+
+def write_file(
+    config: Config,
+    path: str,
+    content: str,
+    overwrite: bool = False,
+    expected_sha256: str | None = None,
+    full_replace_token: str | None = None,
+    allow_large_reduction: bool = False,
+) -> dict[str, Any]:
+    target = resolve_allowed_path(path, config.allowed_roots, must_exist=False)
+    return transactions.write_text(
+        config.audit_log.parent,
+        target,
+        content,
+        overwrite=overwrite,
+        expected_sha256=expected_sha256,
+        full_replace_token=full_replace_token,
+        allow_large_reduction=allow_large_reduction,
+    )
+
+
+def apply_patch(
+    config: Config,
+    path: str,
+    old: str,
+    new: str,
+    expected_sha256: str | None = None,
+) -> dict[str, Any]:
+    target = resolve_allowed_path(path, config.allowed_roots, must_exist=True)
+    result = transactions.apply_exact_patch(
+        config.audit_log.parent,
+        target,
+        old,
+        new,
+        expected_sha256=expected_sha256,
+    )
+    result["diff"], result["truncated"] = truncate_text(
+        result["diff"],
+        config.max_output_chars,
+    )
+    return result
+
+
+def start_job(
+    config: Config,
+    operation_id: str,
+    command: str,
+    cwd: str | None = None,
+    timeout_sec: int = 900,
+) -> dict[str, Any]:
+    return job_manager.start_job(
+        config,
+        operation_id=operation_id,
+        command=command,
+        cwd=cwd,
+        timeout_sec=timeout_sec,
+    )
+
+
+def job_status(config: Config, job_id: str) -> dict[str, Any]:
+    return job_manager.job_status(config, job_id)
+
+
+def job_logs(
+    config: Config,
+    job_id: str,
+    stdout_offset: int = 0,
+    stderr_offset: int = 0,
+    max_bytes: int = 16_384,
+) -> dict[str, Any]:
+    return job_manager.job_logs(
+        config,
+        job_id,
+        stdout_offset=stdout_offset,
+        stderr_offset=stderr_offset,
+        max_bytes=max_bytes,
+    )
+
+
+def list_jobs(config: Config, limit: int = 50) -> dict[str, Any]:
+    return job_manager.list_jobs(config, limit)
+
+
+def cancel_job(
+    config: Config,
+    job_id: str,
+    grace_sec: float = 2.0,
+) -> dict[str, Any]:
+    return job_manager.cancel_job(
+        config,
+        job_id,
+        grace_sec=grace_sec,
+    )
 
 
 def _run(config: Config, args: list[str], cwd: str | None, timeout_sec: int = 30) -> dict[str, Any]:

@@ -594,46 +594,51 @@ class StdioMCPClient:
         pid = self._process.pid
         log.info("downstream %s: stopping pid=%d", self._downstream_id, pid)
 
-        # Try to close stdin (signals EOF to well-behaved MCP servers)
+        # Close stdin first. Well-behaved stdio MCP servers treat EOF as a
+        # graceful shutdown signal; giving them a brief window to exit lets
+        # managed child processes (notably persistent Chrome profiles) flush
+        # state before we terminate the whole process group.
         try:
             if self._process.stdin and not self._process.stdin.is_closing():
                 self._process.stdin.close()
         except Exception:
             pass
 
-        # Send SIGTERM to the process group.  The stdout reader remains active
-        # until process EOF so _async_start can finish cleanly.
         try:
-            os.killpg(os.getpgid(pid), signal.SIGTERM)
-        except (ProcessLookupError, PermissionError, OSError):
-            try:
-                self._process.terminate()
-            except ProcessLookupError:
-                return
-
-        # Wait with bounded timeout
-        try:
-            await asyncio.wait_for(
-                self._process.wait(), timeout=5.0,
-            )
+            await asyncio.wait_for(self._process.wait(), timeout=1.5)
         except asyncio.TimeoutError:
-            log.warning(
-                "downstream %s: pid=%d did not exit, sending SIGKILL",
-                self._downstream_id, pid,
-            )
+            # The server did not honor EOF promptly. Fall back to the bounded
+            # process-group termination path so orphan prevention is preserved.
             try:
-                os.killpg(os.getpgid(pid), signal.SIGKILL)
+                os.killpg(os.getpgid(pid), signal.SIGTERM)
             except (ProcessLookupError, PermissionError, OSError):
                 try:
-                    self._process.kill()
+                    self._process.terminate()
                 except ProcessLookupError:
-                    pass
+                    return
+
             try:
                 await asyncio.wait_for(
-                    self._process.wait(), timeout=3.0,
+                    self._process.wait(), timeout=3.5,
                 )
             except asyncio.TimeoutError:
-                pass
+                log.warning(
+                    "downstream %s: pid=%d did not exit, sending SIGKILL",
+                    self._downstream_id, pid,
+                )
+                try:
+                    os.killpg(os.getpgid(pid), signal.SIGKILL)
+                except (ProcessLookupError, PermissionError, OSError):
+                    try:
+                        self._process.kill()
+                    except ProcessLookupError:
+                        pass
+                try:
+                    await asyncio.wait_for(
+                        self._process.wait(), timeout=3.0,
+                    )
+                except asyncio.TimeoutError:
+                    pass
 
         if self._reader_task is not None and not self._reader_task.done():
             try:
