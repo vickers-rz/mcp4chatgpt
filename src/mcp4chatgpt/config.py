@@ -73,6 +73,7 @@ class Config:
     computer_mode: str = "off"
     computer_allowed_apps: tuple[str, ...] = ()
     computer_backend: str = "native"
+    tool_exposure: str = "full"
 
     @property
     def mcp_url(self) -> str:
@@ -122,6 +123,9 @@ def load_config() -> Config:
     computer_backend = os.environ.get("MCP_COMPUTER_BACKEND", "auto").strip().lower()
     if computer_backend not in {"auto", "cua", "native"}:
         raise ValueError("MCP_COMPUTER_BACKEND must be auto, cua, or native")
+    tool_exposure = os.environ.get("MCP_TOOL_EXPOSURE", "full").strip().lower()
+    if tool_exposure not in {"full", "compact"}:
+        raise ValueError("MCP_TOOL_EXPOSURE must be full or compact")
 
     return Config(
         public_base_url=public_base_url,
@@ -153,4 +157,5 @@ def load_config() -> Config:
         computer_mode=computer_mode,
         computer_allowed_apps=computer_allowed_apps,
         computer_backend=computer_backend,
+        tool_exposure=tool_exposure,
     )

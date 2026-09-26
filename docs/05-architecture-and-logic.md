@@ -93,6 +93,8 @@ Supported MCP methods:
 - `tools/list`
 - `tools/call`
 - `resources/list`
+- `resources/read`
+- `server/discover` when the modern protocol is enabled
 - `prompts/list`
 
 ## Tool Registry
@@ -116,6 +118,23 @@ Tool names are prefixed by capability:
 
 This prefix split is deliberate: it helps ChatGPT choose the right capability
 and makes future authorization scopes easier to add.
+
+### Progressive capability discovery
+
+The registry keeps a canonical catalog of configured local and allow/deny-filtered
+downstream tools. `capability_search` returns concise lexical matches,
+`capability_get` returns one complete schema, and `capability_call` validates
+arguments against that schema before routing once through the original handler
+and audit channel. Search and get are read-only; call has conservative effect
+hints. The catalog version hashes stable definitions, while the toolset hash
+also includes the exposed profile.
+
+`MCP_TOOL_EXPOSURE=full` is the default and retains existing tools while
+adding the discovery entrypoints. `compact` lists server_info, all enabled
+computer tools, and the three discovery entrypoints. Exposure is a presentation
+choice, not an authorization boundary: hidden legacy names remain callable for
+cached clients and can also be discovered. Computer tools stay directly listed
+so normal GUI observe/action cycles do not require generic dispatch each turn.
 
 ## Local Ops
 
@@ -247,6 +266,8 @@ Important variables:
   header allowlist. Defaults already include `localhost`, `127.0.0.1`, `::1`,
   `MCP_BIND_HOST`, and the hostname from `MCP_PUBLIC_BASE_URL`.
 - `MCP_AUTH_SECRET`: local approval secret and token signing key.
+- `MCP_TOOL_EXPOSURE`: `full` (default) or `compact`; controls `tools/list`
+  only and does not disable direct calls.
 - `MCP_ALLOWED_ROOTS`: roots allowed for file, command, Git, and patch tools.
 - `MCP_CO_TE_PATH`: path to the reusable macOS terminal backend. If unset, the
   default is the sibling path `../codex_work_with_apps/co-te.py` relative to

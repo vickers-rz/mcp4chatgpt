@@ -70,6 +70,7 @@ name = "mcp4chatgpt"
 version = "0.3.0"
 source = { editable = "." }
 dependencies = [
+    { name = "jsonschema" },
     { name = "openpyxl" },
     { name = "pymupdf" },
     { name = "websockets" },
@@ -77,13 +78,12 @@ dependencies = [
 
 [package.optional-dependencies]
 dev = [
-    { name = "jsonschema" },
     { name = "pytest" },
 ]
 
 [package.metadata]
 requires-dist = [
-    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.23" },
+    { name = "jsonschema", specifier = ">=4.23" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pymupdf", specifier = "==1.28.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=9.1.0" },

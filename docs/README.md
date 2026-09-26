@@ -3,6 +3,8 @@
 ## Current implementation and operation
 
 - [Architecture and logic](05-architecture-and-logic.md): runtime topology, request flow, configuration, and deployment.
+- [mcpc protocol acceptance](20-mcpc-protocol-acceptance.md): pinned external MCP client protocol tests and OAuth acceptance limits.
+- [Capability orchestration design](21-capability-orchestration-design.md): next-stage isolated read-only composition proposal.
 - [macOS Computer Use](macos-computer-use.md): CUA/native routing, permissions, allowlists, and trust boundary.
 - [Chrome extension bridge](chrome_extension.md): browser extension setup and bridge behavior.
 - [Workspace transactions and durable jobs](13-workspace-transactions-and-durable-jobs.md): file recovery and job persistence.
@@ -20,6 +22,7 @@
 - [GUI hardening and fault review](11-handoff-macos-gui-hardening-and-fault-review.md): historical review notes.
 
 - [CUA live PDCA acceptance, 2026-09-26](19-cua-live-pdca-2026-09-26.md): owned-window transport acceptance and native/CUA token fix.
+- [Tool discovery implementation record](22-capability-discovery-implementation.md): mcpc and full/compact catalog verification.
 
 ## Plans and handoffs
 

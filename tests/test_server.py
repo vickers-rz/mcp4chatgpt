@@ -161,9 +161,9 @@ class ServerTests(unittest.TestCase):
                 tools = post_json(base + "/mcp", {"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}, token)
                 definitions = tools["result"]["tools"]
                 names = [tool["name"] for tool in definitions]
-                self.assertEqual(names, [tool.name for tool in build_tools()])
-                self.assertEqual(len(names), len(build_tools()))
-                self.assertEqual(len(set(names)), len(build_tools()))
+                self.assertEqual(names, [tool.name for tool in build_tools()] + ["capability_search", "capability_get", "capability_call"])
+                self.assertEqual(len(names), len(build_tools()) + 3)
+                self.assertEqual(len(set(names)), len(build_tools()) + 3)
                 for tool in definitions:
                     self.assertIn("securitySchemes", tool)
                     self.assertEqual(tool["securitySchemes"], tool["_meta"]["securitySchemes"])
@@ -211,7 +211,7 @@ class ServerTests(unittest.TestCase):
                 ]
                 list_event = next(event for event in audit_events if event.get("method") == "tools/list")
                 self.assertEqual(list_event["auth_mode"], "bearer")
-                self.assertEqual(list_event["tool_count"], len(build_tools()))
+                self.assertEqual(list_event["tool_count"], len(build_tools()) + 3)
                 self.assertEqual(len(list_event["toolset_hash"]), 64)
             finally:
                 server.shutdown()
@@ -275,7 +275,7 @@ class ServerTests(unittest.TestCase):
             try:
                 tools = post_json(f"http://{host}:{port}/mcp", {"jsonrpc": "2.0", "id": 1, "method": "tools/list", "params": {}})
                 definitions = tools["result"]["tools"]
-                self.assertEqual(len(definitions), len(build_tools()))
+                self.assertEqual(len(definitions), len(build_tools()) + 3)
                 for tool in definitions:
                     self.assertNotIn("securitySchemes", tool)
                     self.assertNotIn("securitySchemes", tool["_meta"])
@@ -439,7 +439,7 @@ class ServerTests(unittest.TestCase):
                     [tool["name"] for tool in modern_tools["tools"]],
                     [tool["name"] for tool in legacy_tools["tools"]],
                 )
-                self.assertEqual(len(modern_tools["tools"]), len(build_tools()))
+                self.assertEqual(len(modern_tools["tools"]), len(build_tools()) + 3)
                 self.assertEqual(modern_tools["resultType"], "complete")
                 self.assertEqual((modern_tools["ttlMs"], modern_tools["cacheScope"]), (0, "private"))
 
@@ -468,7 +468,7 @@ class ServerTests(unittest.TestCase):
                 self.assertEqual(len(list_events), 2)
                 self.assertEqual({event["toolset_hash"] for event in list_events}, {server.registry.toolset_hash})
                 self.assertEqual({event["auth_mode"] for event in list_events}, {"bearer"})
-                self.assertEqual({event["tool_count"] for event in list_events}, {len(build_tools())})
+                self.assertEqual({event["tool_count"] for event in list_events}, {len(build_tools()) + 3})
             finally:
                 server.shutdown()
                 server.server_close()

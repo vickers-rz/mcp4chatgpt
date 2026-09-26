@@ -41,10 +41,15 @@ uv sync --extra dev
 scripts/dev.sh
 ```
 
-The full pytest command includes function-style tests. Four native macOS GUI
-acceptance tests are skipped by default; run those separately on the intended
-desktop session after granting the required permissions. A passing simulated
-suite does not verify interaction with the user's live desktop.
+The full pytest command includes function-style tests. Native and CUA macOS GUI
+acceptance tests and the pinned mcpc integration are opt-in; run them separately
+on the intended desktop or test service after granting the required permissions.
+A passing simulated suite does not verify interaction with the user's live
+desktop or ChatGPT connector.
+
+The MCP tool list defaults to `full`. Set `MCP_TOOL_EXPOSURE=compact` in a
+separate test launch to inspect the reduced discovery surface. Hidden legacy
+tools remain callable; see `docs/05-architecture-and-logic.md`.
 
 The server defaults to `127.0.0.1:8766`. Use Cloudflare Tunnel for public HTTPS.
 

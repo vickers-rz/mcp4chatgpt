@@ -188,11 +188,12 @@ _NAMED_MODERN_METHODS = {
 }
 
 _SERVER_INSTRUCTIONS = (
-    "Use MCP4ChatGPT as a browser/file gateway. Before ext_* Chrome work call ext_connection_status; prefer "
-    "explicit IDs and the least-privileged tool that fits. Use ext_* for the extension bridge and chrome_devtools__* for snapshots, "
-    "network inspection, and interaction; use ext_run_js only when no dedicated tool fits. For non-text local "
-    "files use local_expose_file, then resource_link/resources/read, instead of local RAG. Use browser_*/chrome_* "
-    "only as read-only fallback when the extension is unavailable."
+    "MCP4ChatGPT provides local, PDF, web and knowledge tools. Before ext_* work call "
+    "ext_connection_status; prefer explicit IDs and least-privileged tools. Use ext_* for the bridge, "
+    "chrome_devtools__* for snapshots/network/interaction, and ext_run_js only if no dedicated tool fits. "
+    "For non-text files call local_expose_file then resource_link/resources/read. Use browser_*/chrome_* "
+    "as read-only fallback if the extension is unavailable. Discover via capability_search/get; invoke "
+    "catalog tools with capability_call."
 )
 
 
@@ -499,7 +500,7 @@ class Handler(BaseHTTPRequestHandler):
             }
             if method == "tools/list":
                 audit_fields.update(
-                    tool_count=len(self.server.registry._listed_tool_names),
+                    tool_count=len(self.server.registry._all_listed_names),
                     toolset_hash=self.server.registry.toolset_hash,
                 )
             self.server.registry.audit.log("mcp_request", **audit_fields)

@@ -19,6 +19,10 @@ import platform
 from dataclasses import dataclass
 from typing import Any, Callable
 
+from jsonschema import Draft202012Validator
+from jsonschema.validators import validator_for
+from jsonschema.exceptions import SchemaError, ValidationError
+
 from . import __version__
 from .audit import AuditLogger
 from .config import Config
@@ -1026,11 +1030,127 @@ class ToolRegistry:
                 self._downstream_tool_channels[ds_tool.namespaced_name] = ds_tool.downstream_id
             self._downstream_tool_names = tuple(t.namespaced_name for t in ds_tools)
 
-        self._all_listed_names = self._listed_tool_names + self._downstream_tool_names
+        self._catalog_names = self._listed_tool_names + self._downstream_tool_names
+        self._catalog_name_set = frozenset(self._catalog_names)
+        self._catalog_sources = {
+            name: (f"downstream:{self._downstream_tool_channels[name]}" if name in self._downstream_tool_channels else "local")
+            for name in self._catalog_names
+        }
+        self.catalog_version = self._catalog_hash()
+        self.tools.update({
+            "capability_search": Tool(
+                "capability_search",
+                "Search available MCP capabilities by name, description, and source.",
+                _schema({"query": {"type": "string", "minLength": 1, "maxLength": 256},
+                         "limit": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10}}, ["query"]),
+                lambda _c, a: self._capability_search(a),
+            ),
+            "capability_get": Tool(
+                "capability_get",
+                "Get the complete definition and input schema for one capability.",
+                _schema({"name": {"type": "string", "minLength": 1}}, ["name"]),
+                lambda _c, a: self._capability_get(a),
+            ),
+            "capability_call": Tool(
+                "capability_call",
+                "Validate arguments and call one named capability through its existing handler.",
+                _schema({"name": {"type": "string", "minLength": 1},
+                         "arguments": {"type": "object"}}, ["name", "arguments"]),
+                lambda _c, _a: (_ for _ in ()).throw(ValueError("capability_call_recursive")),
+                annotations_override={"readOnlyHint": False, "destructiveHint": True,
+                                      "idempotentHint": False, "openWorldHint": True},
+            ),
+        })
+        self._capability_tool_names = ("capability_search", "capability_get", "capability_call")
+        exposure = getattr(config, "tool_exposure", "full")
+        if exposure not in {"full", "compact"}:
+            raise ValueError("MCP_TOOL_EXPOSURE must be full or compact")
+        self.tool_exposure = exposure
+        if exposure == "compact":
+            visible = tuple(name for name in self._catalog_names
+                            if name == "server_info" or name.startswith("computer_"))
+            self._all_listed_names = visible + self._capability_tool_names
+        else:
+            self._all_listed_names = self._catalog_names + self._capability_tool_names
         self._listed_tool_name_set = frozenset(self._all_listed_names)
-        self.toolset_hash = hashlib.sha256("\n".join(self._all_listed_names).encode("utf-8")).hexdigest()
+        self.toolset_hash = self._definition_hash(self._all_listed_names, auth_required=False, exposure=exposure)
         for name in self._listed_tool_names:
             self.tools[f"MCP4ChatGPT.{name}"] = self.tools[name]
+
+    def _definition_hash(self, names: tuple[str, ...], *, auth_required: bool, exposure: str = "") -> str:
+        definitions = [self.tools[name].definition(auth_required=auth_required) for name in sorted(names)]
+        encoded = json.dumps({"exposure": exposure, "tools": definitions}, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _catalog_hash(self) -> str:
+        entries = [{
+            "source": self._catalog_sources[name],
+            "tool": self.tools[name].definition(auth_required=False),
+        } for name in sorted(self._catalog_names)]
+        encoded = json.dumps(entries, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _capability_search(self, args: dict[str, Any]) -> dict[str, Any]:
+        query = args.get("query")
+        if not isinstance(query, str) or not 1 <= len(query.strip()) <= 256:
+            raise ValueError("capability_query_invalid")
+        limit = args.get("limit", 10)
+        if type(limit) is not int or not 1 <= limit <= 50:
+            raise ValueError("capability_limit_invalid")
+        terms = query.strip().casefold().split()
+        if not terms:
+            raise ValueError("capability_query_invalid")
+        ranked: list[tuple[int, str]] = []
+        for name in self._catalog_names:
+            tool = self.tools[name]
+            text = f"{name} {tool.description} {self._catalog_sources[name]}".casefold()
+            if all(term in text for term in terms):
+                name_text = name.casefold()
+                rank = 0 if name_text == query.strip().casefold() else 1 if all(term in name_text for term in terms) else 2
+                ranked.append((rank, name))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        matches = [{
+            "name": name,
+            "description": self.tools[name].description[:240],
+            "source": self._catalog_sources[name],
+            "annotations": self.tools[name].definition(auth_required=False).get("annotations", {}),
+        } for _, name in ranked[:limit]]
+        return {"catalog_version": self.catalog_version, "matches": matches, "truncated": len(ranked) > limit}
+
+    def _capability_get(self, args: dict[str, Any]) -> dict[str, Any]:
+        name = args.get("name")
+        if not isinstance(name, str) or name not in self._catalog_name_set:
+            raise ValueError("capability_not_found")
+        return {"catalog_version": self.catalog_version, "tool": self.tools[name].definition(auth_required=True)}
+
+    @staticmethod
+    def _check_schema_references(schema: Any) -> None:
+        if isinstance(schema, dict):
+            for ref_key in ("$ref", "$dynamicRef", "$recursiveRef"):
+                ref = schema.get(ref_key)
+                if ref is not None and (not isinstance(ref, str) or not ref.startswith("#")):
+                    raise ValueError("capability_external_ref_unsupported")
+            for value in schema.values():
+                ToolRegistry._check_schema_references(value)
+        elif isinstance(schema, list):
+            for value in schema:
+                ToolRegistry._check_schema_references(value)
+
+    def _validate_capability_arguments(self, tool: Tool, arguments: Any) -> None:
+        if not isinstance(arguments, dict):
+            raise ValueError("capability_arguments_invalid")
+        schema = tool.input_schema
+        self._check_schema_references(schema)
+        try:
+            validator_type = validator_for(schema, default=Draft202012Validator)
+            validator_type.check_schema(schema)
+            validator_type(schema).validate(arguments)
+        except SchemaError as exc:
+            raise ValueError("capability_schema_invalid") from exc
+        except ValidationError as exc:
+            raise ValueError(f"capability_arguments_invalid: {exc.message[:240]}") from exc
+        except Exception as exc:
+            raise ValueError("capability_schema_invalid") from exc
 
     def _make_downstream_handler(self, namespaced_name: str) -> ToolHandler:
         """Create a handler that preserves downstream MCP content blocks verbatim."""
@@ -1058,7 +1178,7 @@ class ToolRegistry:
                 "description": self.tools[name].description,
                 "mimeType": "application/json",
             }
-            for name in sorted(self._listed_tool_names)
+            for name in sorted(self._catalog_names)
         ]
         return {"resources": tool_resources + file_resources.list_resources()}
 
@@ -1072,7 +1192,7 @@ class ToolRegistry:
             name = uri.removeprefix("MCP4ChatGPT.")
         else:
             raise ValueError(f"Unknown resource: {uri}")
-        if name not in frozenset(self._listed_tool_names):
+        if name not in self._catalog_name_set:
             raise ValueError(f"Unknown tool resource: {uri}")
         return {
             "contents": [
@@ -1088,6 +1208,23 @@ class ToolRegistry:
         tool = self.tools.get(name)
         if not tool:
             raise ValueError(f"Unknown tool: {name}")
+        if name == "capability_call":
+            args = arguments or {}
+            target_name = args.get("name")
+            if target_name in self._capability_tool_names:
+                raise ValueError("capability_call_recursive")
+            if not isinstance(target_name, str) or target_name not in self._catalog_name_set:
+                raise ValueError("capability_not_found")
+            target = self.tools[target_name]
+            target_args = args.get("arguments")
+            self._validate_capability_arguments(target, target_args)
+            return self._invoke_tool(target_name, target, target_args, client_id, invoked_via="capability_call")
+        return self._invoke_tool(name, tool, arguments or {}, client_id)
+
+    def _invoke_tool(
+        self, name: str, tool: Tool, arguments: dict[str, Any], client_id: str,
+        *, invoked_via: str | None = None,
+    ) -> dict[str, Any]:
         # Keep audit channel identity explicit without logging downstream
         # response bodies. Extension tools remain distinguishable from native
         # tools, and each downstream records its configured integration id.
@@ -1112,10 +1249,22 @@ class ToolRegistry:
                         audit_fields["effect"] = outcome["effect"]
                     if not audit_ok:
                         audit_fields["error"] = outcome.get("error", "computer_failed")
-            self.audit.log("tool_call", tool=name, client_id=client_id, ok=audit_ok, channel=channel, **audit_fields)
+            if name == "server_info" and isinstance(result, dict):
+                result = {
+                    **result,
+                    "tool_catalog": {
+                        "exposure": self.tool_exposure,
+                        "capability_count": len(self._catalog_names),
+                        "listed_count": len(self._all_listed_names),
+                        "catalog_version": self.catalog_version,
+                    },
+                }
+            self.audit.log("tool_call", tool=name, client_id=client_id, ok=audit_ok, channel=channel,
+                           **({"invoked_via": invoked_via} if invoked_via else {}), **audit_fields)
             if isinstance(result, RawMCPToolResult):
                 return result.value
             return _ok(result)
         except Exception as exc:
-            self.audit.log("tool_call", tool=name, client_id=client_id, ok=False, error=str(exc), channel=channel)
+            self.audit.log("tool_call", tool=name, client_id=client_id, ok=False, error=str(exc), channel=channel,
+                           **({"invoked_via": invoked_via} if invoked_via else {}))
             raise

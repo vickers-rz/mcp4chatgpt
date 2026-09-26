@@ -843,10 +843,10 @@ class CoreTests(unittest.TestCase):
             registry = ToolRegistry(config, AuditLogger(config.audit_log))
             definitions = registry.list_tools(auth_required=True)["tools"]
             names = {tool["name"] for tool in definitions}
-            self.assertEqual(len(definitions), len(registry._listed_tool_names))
+            self.assertEqual(len(definitions), len(registry._all_listed_names))
             self.assertEqual(len(names), len(definitions))
             self.assertTrue({"ext_search_web", "ext_read_webpage", "ext_web_rag"} <= names)
-            self.assertEqual([tool["name"] for tool in definitions], list(registry._listed_tool_names))
+            self.assertEqual([tool["name"] for tool in definitions], list(registry._all_listed_names))
             for tool in definitions:
                 self.assertLessEqual(len(tool["name"]), 128)
                 self.assertTrue({"name", "description", "inputSchema", "annotations"} <= tool.keys())

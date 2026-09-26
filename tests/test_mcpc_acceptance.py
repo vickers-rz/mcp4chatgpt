@@ -16,6 +16,7 @@ import pytest
 
 from mcp4chatgpt.oauth import AUTH_CODES, issue_token
 from mcp4chatgpt.server import create_server
+from mcp4chatgpt.downstream.models import DownstreamToolInfo
 from test_core import make_config
 
 
@@ -25,7 +26,23 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def test_pinned_mcpc_http_protocol_roundtrip(tmp_path):
+class FakeDownstream:
+    def get_tools(self):
+        return [DownstreamToolInfo(
+            "lookup", "docs__lookup", "Return a controlled multimodal fixture.",
+            {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+            "docs",
+        )]
+
+    def call_tool(self, name, arguments):
+        return {"content": [
+            {"type": "image", "mimeType": "image/png", "data": "AA=="},
+            {"type": "resource_link", "uri": "file:///controlled", "name": "fixture"},
+        ], "structuredContent": {"name": name, "query": arguments["query"]}}
+
+
+@pytest.mark.parametrize("exposure", ["full", "compact"])
+def test_pinned_mcpc_http_protocol_roundtrip(tmp_path, exposure):
     binary = Path(__file__).parent / "mcp_protocol" / "node_modules" / ".bin" / "mcpc"
     if platform.system() == "Windows":
         binary = binary.with_suffix(".cmd")
@@ -34,8 +51,9 @@ def test_pinned_mcpc_http_protocol_roundtrip(tmp_path):
 
     allowed = tmp_path / "allowed"
     allowed.mkdir()
-    config = replace(make_config(tmp_path), allowed_roots=[allowed], computer_mode="off")
-    server = create_server(config)
+    config = replace(make_config(tmp_path), allowed_roots=[allowed], computer_mode="off",
+                     tool_exposure=exposure)
+    server = create_server(config, downstream_manager=FakeDownstream())
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     session = f"@mcp4-{os.getpid()}-{time.time_ns()}"
@@ -80,6 +98,11 @@ def test_pinned_mcpc_http_protocol_roundtrip(tmp_path):
         names = [item["name"] for item in listed_tools]
         assert len(names) == len(set(names))
         assert "server_info" in names
+        assert "capability_search" in names
+        if exposure == "full":
+            assert "docs__lookup" in names
+        if exposure == "compact":
+            assert "local_read_text" not in names
         schema = json.loads(run(session, "tools-get", "server_info").stdout)
         assert schema["name"] == "server_info"
         call = json.loads(run(session, "tools-call", "server_info").stdout)
@@ -87,6 +110,31 @@ def test_pinned_mcpc_http_protocol_roundtrip(tmp_path):
         rendered = json.dumps(call, ensure_ascii=False)
         assert "test-secret" not in rendered
         assert "mcp4chatgpt" in rendered.lower()
+        fixture_file = allowed / "mcpc-fixture.txt"
+        fixture_file.write_text("mcpc local call", encoding="utf-8")
+        regular = json.loads(run(session, "tools-call", "local_read_text",
+                                 json.dumps({"path": str(fixture_file)})).stdout)
+        assert "mcpc local call" in json.dumps(regular)
+        found = json.loads(run(session, "tools-call", "capability_search",
+                               '{"query":"pdf inspect","limit":1}').stdout)
+        assert "pdf_inspect" in json.dumps(found)
+        downstream_found = json.loads(run(session, "tools-call", "capability_search",
+                                          '{"query":"controlled multimodal"}').stdout)
+        assert "docs__lookup" in json.dumps(downstream_found)
+        downstream_schema = json.loads(run(session, "tools-call", "capability_get",
+                                           '{"name":"docs__lookup"}').stdout)
+        assert "docs__lookup" in json.dumps(downstream_schema)
+        got = json.loads(run(session, "tools-call", "capability_get",
+                             '{"name":"server_info"}').stdout)
+        assert "server_info" in json.dumps(got)
+        called = json.loads(run(session, "tools-call", "capability_call",
+                                '{"name":"server_info","arguments":{}}').stdout)
+        assert "tool_catalog" in json.dumps(called)
+        multimedia = json.loads(run(session, "tools-call", "capability_call",
+                                    '{"name":"docs__lookup","arguments":{"query":"fixture"}}').stdout)
+        assert any(block.get("type") == "image" for block in multimedia["content"]), multimedia
+        assert any(block.get("type") == "resource_link" for block in multimedia["content"]), multimedia
+        assert multimedia["structuredContent"]["query"] == "fixture"
         resources = json.loads(run(session, "resources-list").stdout)
         listed_resources = resources.get("resources") if isinstance(resources, dict) else resources
         uris = [resource["uri"] for resource in listed_resources]
@@ -109,6 +157,21 @@ def test_pinned_mcpc_http_protocol_roundtrip(tmp_path):
             text=True, capture_output=True, timeout=30,
         )
         assert invalid.returncode != 0
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+        old = run("--timeout", "2", session, "tools-call", "server_info", success=False)
+        assert old.returncode != 0
+        restarted_config = replace(config, bind_port=port)
+        server = create_server(restarted_config, downstream_manager=FakeDownstream())
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        restarted = session + "-restart"
+        run("connect", f"{config_path}:sut", restarted)
+        assert "mcp4chatgpt" in json.dumps(json.loads(run(restarted).stdout)).lower()
+        assert "mcp4chatgpt" in json.dumps(json.loads(run(restarted, "tools-call", "server_info").stdout)).lower()
+        run("close", restarted)
+        run("close", session, success=False)
     finally:
         try:
             run("close", session, success=False)
@@ -121,3 +184,5 @@ def test_pinned_mcpc_http_protocol_roundtrip(tmp_path):
         assert not (mcpc_home / "sessions.json").exists() or not json.loads(
             (mcpc_home / "sessions.json").read_text()
         ).get("sessions")
+        if (mcpc_home / "bridges").exists():
+            assert not list((mcpc_home / "bridges").glob("*.sock"))

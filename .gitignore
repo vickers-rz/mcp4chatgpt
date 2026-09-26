@@ -13,3 +13,5 @@ tmp.*.pid
 refer/
 
 *.egg-info/
+
+node_modules/
