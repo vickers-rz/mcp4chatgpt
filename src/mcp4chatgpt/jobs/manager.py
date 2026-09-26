@@ -78,6 +78,16 @@ def _augment_status(store: JobStore, metadata: dict[str, Any]) -> dict[str, Any]
             result["supervisor_pid"] = supervisor_pid
 
     child_pgid = result.get("child_pgid")
+    if state not in TERMINAL_STATES:
+        expected = result.get("supervisor_identity")
+        if expected is None:
+            result["state"] = "unknown"
+            result["process_identity_verified"] = False
+            result["supervisor_alive"] = False
+            result["child_alive"] = False
+            result["process_alive"] = False
+            return result
+        result["process_identity_verified"] = None
     if state in TERMINAL_STATES:
         # Terminal metadata is authoritative. Detached supervisors may remain
         # briefly visible as zombies until their parent reaps them; reporting
@@ -254,7 +264,10 @@ def start_job(
         store.write_supervisor_pid(job_id, supervisor.pid)
         metadata = store.update_metadata(
             job_id,
-            {"supervisor_pid": supervisor.pid},
+            {
+                "supervisor_pid": supervisor.pid,
+                "supervisor_identity": process.process_identity(supervisor.pid),
+            },
         )
 
     return {
@@ -339,6 +352,14 @@ def cancel_job(
     if supervisor_pid is None:
         supervisor_pid = store.read_supervisor_pid(job_id)
 
+    expected_identity = metadata.get("supervisor_identity")
+    if (
+        supervisor_pid is None
+        or expected_identity is None
+        or process.process_identity(int(supervisor_pid)) != expected_identity
+    ):
+        return {**_augment_status(store, metadata), "state": "unknown", "error": "process_identity_unverified", "cancel_requested": False}
+
     # The supervisor handles SIGTERM by terminating its child process group and
     # writing a terminal cancelled state.
     process.signal_pid(
@@ -360,8 +381,11 @@ def cancel_job(
     current = store.read_metadata(job_id)
     child_pgid = current.get("child_pgid")
     if child_pgid is not None:
+        child_identity = current.get("child_identity")
+        if child_identity is None or process.process_identity(int(child_pgid)) != child_identity:
+            return {**_augment_status(store, current), "state": "unknown", "error": "child_identity_unverified", "cancel_requested": True}
         process.terminate_process_group(int(child_pgid), grace_sec=0.5)
-    if supervisor_pid is not None:
+    if supervisor_pid is not None and process.process_identity(int(supervisor_pid)) == expected_identity:
         process.signal_pid(int(supervisor_pid), signal.SIGKILL)
 
     current = store.update_metadata(

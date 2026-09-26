@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
 import time
 
 
@@ -19,6 +20,21 @@ def pid_alive(pid: int | None) -> bool:
     return True
 
 
+def process_identity(pid: int | None) -> str | None:
+    """Return an OS start-time/command identity suitable for stale-PID checks."""
+    if pid is None or int(pid) <= 0:
+        return None
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(int(pid)), "-o", "lstart=", "-o", "command="],
+            capture_output=True, text=True, timeout=1.0, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    value = result.stdout.strip()
+    return value or None
+
+
 def process_group_alive(pgid: int | None) -> bool:
     if pgid is None or int(pgid) <= 0:
         return False
@@ -28,12 +44,9 @@ def process_group_alive(pgid: int | None) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Some sandboxed macOS execution contexts reject group signalling even
-        # when the group leader is our own child. Since durable jobs create a
-        # new session with PGID == child PID, the leader remains a useful
-        # liveness fallback.
-        return pid_alive(pgid)
-    return True
+        return bool(_group_members(pgid))
+    members = _group_members(pgid)
+    return bool(members) if members else False
 
 
 def signal_pid(pid: int | None, sig: int) -> bool:
@@ -55,11 +68,37 @@ def signal_process_group(pgid: int | None, sig: int) -> bool:
     except ProcessLookupError:
         return False
     except PermissionError:
-        # Restricted macOS runners can deny killpg() while still allowing a
-        # signal to the group leader. Durable jobs create the child with
-        # start_new_session=True, so PGID == child PID.
-        return signal_pid(pgid, sig)
+        # Some macOS app sandboxes deny killpg() while still allowing signals
+        # to descendants. Enumerate only members of the unique child PGID.
+        members = _group_members(pgid)
+        if not members:
+            return signal_pid(pgid, sig)
+        signalled = False
+        for pid in members:
+            signalled = signal_pid(pid, sig) or signalled
+        return signalled
     return True
+
+
+def _group_members(pgid: int) -> list[int]:
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,pgid=,stat="], capture_output=True, text=True,
+            timeout=1.0, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return [pgid] if pid_alive(pgid) else []
+    members: list[int] = []
+    for line in result.stdout.splitlines():
+        fields = line.split()
+        if len(fields) >= 3:
+            try:
+                pid, group = map(int, fields[:2])
+            except ValueError:
+                continue
+            if group == pgid and not fields[2].startswith("Z"):
+                members.append(pid)
+    return members
 
 
 def terminate_process_group(

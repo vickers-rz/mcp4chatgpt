@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 import base64
+import os
+import subprocess
+import sys
+import time
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -439,3 +443,23 @@ def test_dispatched_write_with_bad_reply_remains_unknown(response):
     assert error.value.effect == 'outcome_unknown'
     assert error.value.fallback_allowed is False
     assert send.call_count == 1
+
+
+def test_nonblocking_protocol_reader_buffers_partial_and_multiple_messages():
+    code = "import os,time; os.write(1,b'{\\\"id\\\":1}\\n{'); time.sleep(.3); os.write(1,b'\\\"id\\\":2}\\n')"
+    child = subprocess.Popen([sys.executable, "-c", code], stdout=subprocess.PIPE, stdin=subprocess.PIPE, bufsize=0)
+    try:
+        os.set_blocking(child.stdout.fileno(), False)
+        computer_cua_backend._process = child
+        computer_cua_backend._read_buffer.clear()
+        assert computer_cua_backend._read_message(.2) == {"id": 1}
+        started = time.monotonic()
+        with pytest.raises(computer_cua_backend.CUABackendError, match="cua_timeout"):
+            computer_cua_backend._read_message(.05)
+        assert time.monotonic() - started < .2
+        assert computer_cua_backend._read_message(.5) == {"id": 2}
+    finally:
+        child.kill()
+        child.wait()
+        computer_cua_backend._process = None
+        computer_cua_backend._read_buffer.clear()

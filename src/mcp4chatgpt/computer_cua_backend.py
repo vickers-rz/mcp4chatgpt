@@ -31,10 +31,18 @@ SNAPSHOT_TTL = 45.0
 MAX_SNAPSHOTS = 64
 
 _lock = threading.RLock()
-_process: subprocess.Popen[str] | None = None
+_process: subprocess.Popen[bytes] | None = None
+_read_buffer = bytearray()
 _request_seq = 0
 _session_id = ""
 _snapshots: dict[str, dict[str, Any]] = {}
+_active_deadline: float | None = None
+
+
+def _remaining_timeout(requested: float) -> float:
+    if _active_deadline is None:
+        return requested
+    return max(0.0, min(requested, _active_deadline - time.monotonic()))
 
 _CUA_OPERATIONS = {
     "list_apps", "get_state", "screenshot", "launch_app",
@@ -161,15 +169,30 @@ def _effective_transport() -> tuple[list[str], dict[str, str], str]:
     return [command, *(str(value) for value in raw_args)], env, str(cwd or Path.home())
 
 
-def _send(message: dict[str, Any]) -> None:
+def _send(message: dict[str, Any], timeout: float = IO_TIMEOUT) -> None:
     process = _process
     if process is None or process.poll() is not None or process.stdin is None:
         raise CUABackendError("cua_not_running", fallback_allowed=True)
     try:
-        process.stdin.write(_json(message) + "\n")
-        process.stdin.flush()
+        payload = (_json(message) + "\n").encode("utf-8")
+        view = memoryview(payload)
+        selector = selectors.DefaultSelector()
+        selector.register(process.stdin, selectors.EVENT_WRITE)
+        deadline = time.monotonic() + _remaining_timeout(timeout)
+        sent = 0
+        while view:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                selector.close()
+                raise CUABackendError("cua_timeout", "outcome_unknown" if sent else "not_started", fallback_allowed=sent == 0)
+            written = os.write(process.stdin.fileno(), view)
+            sent += written
+            view = view[written:]
+        selector.close()
+    except CUABackendError:
+        raise
     except (BrokenPipeError, OSError) as exc:
-        raise CUABackendError("cua_disconnected", fallback_allowed=True) from exc
+        raise CUABackendError("cua_disconnected", "outcome_unknown" if locals().get("sent", 0) else "not_started", fallback_allowed=not locals().get("sent", 0)) from exc
 
 
 def _read_message(timeout: float) -> dict[str, Any]:
@@ -177,21 +200,29 @@ def _read_message(timeout: float) -> dict[str, Any]:
     if process is None or process.poll() is not None or process.stdout is None:
         raise CUABackendError("cua_not_running", fallback_allowed=True)
 
+    global _read_buffer
+    deadline = time.monotonic() + max(0, timeout)
     selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
     try:
-        selector.register(process.stdout, selectors.EVENT_READ)
-        events = selector.select(timeout)
-        if not events:
-            raise CUABackendError("cua_timeout", fallback_allowed=True)
-        line = process.stdout.readline()
+        while b"\n" not in _read_buffer:
+            if len(_read_buffer) > MAX_LINE:
+                raise CUABackendError("cua_protocol_error")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                raise CUABackendError("cua_timeout", fallback_allowed=True)
+            chunk = os.read(process.stdout.fileno(), min(65536, MAX_LINE + 1 - len(_read_buffer)))
+            if not chunk:
+                raise CUABackendError("cua_disconnected", fallback_allowed=True)
+            _read_buffer.extend(chunk)
     finally:
         selector.close()
-    if not line:
-        raise CUABackendError("cua_disconnected", fallback_allowed=True)
-    if len(line.encode("utf-8", errors="ignore")) > MAX_LINE:
+    line, _, tail = _read_buffer.partition(b"\n")
+    _read_buffer = bytearray(tail)
+    if len(line) > MAX_LINE:
         raise CUABackendError("cua_protocol_error")
     try:
-        value = json.loads(line)
+        value = json.loads(line.decode("utf-8"))
     except json.JSONDecodeError as exc:
         raise CUABackendError("cua_protocol_error") from exc
     if not isinstance(value, dict):
@@ -223,7 +254,9 @@ def _wait_response(
     timeout: float,
     effectful: bool,
 ) -> dict[str, Any]:
-    end = time.monotonic() + timeout
+    end = time.monotonic() + _remaining_timeout(timeout)
+    if _active_deadline is not None:
+        end = min(end, _active_deadline)
     while True:
         remaining = end - time.monotonic()
         if remaining <= 0:
@@ -255,7 +288,7 @@ def _wait_response(
                     "action": "accept" if allowed else "decline",
                     "content": {},
                 },
-            })
+            }, timeout=max(0, remaining))
             if not allowed:
                 raise CUABackendError("cua_approval_required", fallback_allowed=False)
         elif "id" in message and isinstance(message.get("method"), str):
@@ -267,7 +300,7 @@ def _wait_response(
 
 
 def _ensure_started() -> None:
-    global _process, _session_id
+    global _process, _session_id, _read_buffer
     if platform.system() != "Darwin":
         raise CUABackendError("cua_unsupported_platform", fallback_allowed=True)
     if _process is not None and _process.poll() is None:
@@ -280,11 +313,15 @@ def _ensure_started() -> None:
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
-            bufsize=1,
+            text=False,
+            bufsize=0,
             env=env,
             cwd=cwd,
+            start_new_session=True,
         )
+        os.set_blocking(_process.stdout.fileno(), False)
+        os.set_blocking(_process.stdin.fileno(), False)
+        _read_buffer.clear()
     except OSError as exc:
         _process = None
         raise CUABackendError("cua_start_failed", fallback_allowed=True) from exc
@@ -315,20 +352,22 @@ def _ensure_started() -> None:
 
 
 def stop() -> None:
-    global _process, _session_id
+    global _process, _session_id, _read_buffer
     with _lock:
         process = _process
         _process = None
         _session_id = ""
+        _read_buffer.clear()
         _snapshots.clear()
         if process is None:
             return
         try:
-            process.terminate()
+            os.killpg(process.pid, 15)
             process.wait(timeout=2)
         except Exception:
             try:
-                process.kill()
+                os.killpg(process.pid, 9)
+                process.wait(timeout=1)
             except Exception:
                 pass
 
@@ -384,6 +423,7 @@ def _call_js(
     effectful: bool = False,
 ) -> Any:
     with _lock:
+        deadline = time.monotonic() + IO_TIMEOUT
         _ensure_started()
         request_id = _next_id()
         code = (
@@ -409,12 +449,15 @@ def _call_js(
                     }
                 },
             },
-        })
+        }, timeout=max(0, deadline - time.monotonic()))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise CUABackendError("cua_timeout", "outcome_unknown" if effectful else "not_started", fallback_allowed=not effectful)
         response = _wait_response(
             request_id,
             operation=operation,
             args=args,
-            timeout=IO_TIMEOUT,
+            timeout=remaining,
             effectful=effectful,
         )
         if "error" in response:
@@ -1043,7 +1086,20 @@ def _call_locked(operation: str, args: dict[str, Any], *, effectful: bool = Fals
     raise CUABackendError("cua_operation_unsupported", fallback_allowed=True)
 
 def call(operation: str, args: dict[str, Any], *, effectful: bool = False) -> dict[str, Any]:
+    global _active_deadline
     # Window selection and the subsequent Sky observation/action are one
     # transaction. The RLock is re-entrant because _call_js also uses it.
-    with _lock:
-        return _call_locked(operation, args, effectful=effectful)
+    acquired = _lock.acquire(timeout=IO_TIMEOUT)
+    if not acquired:
+        raise CUABackendError("cua_timeout", "not_started", fallback_allowed=not effectful)
+    try:
+        _active_deadline = time.monotonic() + IO_TIMEOUT
+        try:
+            return _call_locked(operation, args, effectful=effectful)
+        except CUABackendError as exc:
+            if exc.code in {"cua_timeout", "cua_disconnected", "cua_not_running", "cua_protocol_error"}:
+                stop()
+            raise
+    finally:
+        _active_deadline = None
+        _lock.release()

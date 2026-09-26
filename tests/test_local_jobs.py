@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import signal
+import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -11,7 +13,7 @@ from unittest import mock
 import pytest
 
 from mcp4chatgpt import local_ops
-from mcp4chatgpt.jobs import manager, process
+from mcp4chatgpt.jobs import manager, process, runner
 from mcp4chatgpt.jobs.store import TERMINAL_STATES
 
 
@@ -250,6 +252,22 @@ def test_runner_enforces_job_timeout_independent_of_tool_timeout() -> None:
         )
         assert terminal["timeout_sec"] == 1
         assert terminal["process_alive"] is False
+
+
+def test_cancel_kills_grandchild_that_ignores_sigterm(tmp_path):
+    pid_file = tmp_path / "grandchild.pid"
+    code = (
+        "import subprocess,sys,time,pathlib; "
+        "child=subprocess.Popen([sys.executable,'-c','import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)']); "
+        "pathlib.Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(30)"
+    )
+    parent = subprocess.Popen([sys.executable, "-c", code, str(pid_file)], start_new_session=True)
+    deadline = time.monotonic() + 3
+    while not pid_file.exists() and time.monotonic() < deadline:
+        time.sleep(.02)
+    assert pid_file.exists()
+    runner._terminate_child(parent, grace_sec=.15)
+    assert not process.process_group_alive(parent.pid)
 
 
 def test_signal_process_group_permission_error_falls_back_to_group_leader() -> None:

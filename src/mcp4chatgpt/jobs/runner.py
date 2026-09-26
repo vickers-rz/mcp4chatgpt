@@ -59,29 +59,23 @@ def _terminate_child(
 ) -> int | None:
     """Terminate the whole child process group and reap the direct child."""
 
-    existing = child.poll()
-    if existing is not None:
-        return existing
-
     pgid = child.pid
-    if not process.signal_process_group(pgid, signal.SIGTERM):
-        try:
-            child.terminate()
-        except OSError:
-            pass
-
-    try:
-        return child.wait(timeout=max(0.1, grace_sec))
-    except subprocess.TimeoutExpired:
-        if not process.signal_process_group(pgid, signal.SIGKILL):
-            try:
-                child.kill()
-            except OSError:
-                pass
-        try:
-            return child.wait(timeout=1.0)
-        except subprocess.TimeoutExpired:
+    process.signal_process_group(pgid, signal.SIGTERM)
+    deadline = time.monotonic() + max(0.1, grace_sec)
+    while time.monotonic() < deadline:
+        child.poll()  # reap leader as soon as it exits
+        if not process.process_group_alive(pgid):
             return child.poll()
+        time.sleep(0.05)
+    if process.process_group_alive(pgid):
+        process.signal_process_group(pgid, signal.SIGKILL)
+    try:
+        code = child.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        code = child.poll()
+    if process.process_group_alive(pgid):
+        raise RuntimeError(f"process_group_cleanup_failed:{pgid}")
+    return code
 
 
 def run_job(store_root: Path, job_id: str) -> int:
@@ -98,6 +92,7 @@ def run_job(store_root: Path, job_id: str) -> int:
             "state": "starting",
             "supervisor_pid": os.getpid(),
             "supervisor_pgid": os.getpgrp(),
+            "supervisor_identity": process.process_identity(os.getpid()),
             "started_at": _iso_now(),
         },
         if_states={"prepared", "starting"},
@@ -155,6 +150,7 @@ def run_job(store_root: Path, job_id: str) -> int:
                     "state": "running",
                     "child_pid": child.pid,
                     "child_pgid": child_pgid,
+                    "child_identity": process.process_identity(child.pid),
                 },
                 if_states={"prepared", "starting"},
             )
@@ -166,7 +162,14 @@ def run_job(store_root: Path, job_id: str) -> int:
             while True:
                 exit_code = child.poll()
                 if exit_code is not None:
-                    state = "succeeded" if exit_code == 0 else "failed"
+                    _terminate_child(child, grace_sec=0.2)
+                    cancelled = _cancel_requested or store.cancel_requested(job_id)
+                    timed_out = time.monotonic() >= deadline
+                    state = (
+                        "cancelled" if cancelled else
+                        "timed_out" if timed_out else
+                        "succeeded" if exit_code == 0 else "failed"
+                    )
                     _terminal_update(
                         store,
                         job_id,
@@ -174,10 +177,10 @@ def run_job(store_root: Path, job_id: str) -> int:
                         exit_code=exit_code,
                         started_monotonic=started_monotonic,
                     )
-                    return exit_code
+                    return 124 if timed_out and not cancelled else (0 if cancelled else exit_code)
 
                 if _cancel_requested or store.cancel_requested(job_id):
-                    exit_code = _terminate_child(child, grace_sec=1.0)
+                    exit_code = _terminate_child(child, grace_sec=0.25)
                     _terminal_update(
                         store,
                         job_id,
@@ -188,7 +191,7 @@ def run_job(store_root: Path, job_id: str) -> int:
                     return 0
 
                 if time.monotonic() >= deadline:
-                    exit_code = _terminate_child(child, grace_sec=1.0)
+                    exit_code = _terminate_child(child, grace_sec=0.25)
                     _terminal_update(
                         store,
                         job_id,
@@ -201,7 +204,7 @@ def run_job(store_root: Path, job_id: str) -> int:
 
                 time.sleep(0.1)
     except BaseException as exc:
-        if child is not None and child.poll() is None:
+        if child is not None:
             _terminate_child(child, grace_sec=0.5)
         current = store.read_metadata(job_id)
         if current.get("state") not in TERMINAL_STATES:
