@@ -4,12 +4,16 @@ import base64
 import hashlib
 import hmac
 import json
+import fcntl
+import os
 import secrets
 import threading
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlencode
+from contextlib import contextmanager
 
 from .config import Config
 
@@ -59,7 +63,39 @@ def _load_clients(config: Config) -> dict[str, Any]:
 
 
 def _save_clients(config: Config, clients: dict[str, Any]) -> None:
-    _clients_path(config).write_text(json.dumps(clients, ensure_ascii=False, indent=2), encoding="utf-8")
+    path = _clients_path(config)
+    fd, name = tempfile.mkstemp(prefix=".oauth-clients.", dir=path.parent)
+    temp = Path(name)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            stream.write(json.dumps(clients, ensure_ascii=False, indent=2))
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        temp.unlink(missing_ok=True)
+
+
+_CLIENTS_THREAD_LOCK = threading.RLock()
+
+
+@contextmanager
+def _clients_write_lock(config: Config):
+    lock_path = config.data_dir / "oauth_clients.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _CLIENTS_THREAD_LOCK:
+        fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            yield
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 AUTH_CODE_TTL_SECONDS = 600
@@ -113,15 +149,16 @@ def register_client(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("redirect_uris must be a list of strings.")
     client_id = "client_" + secrets.token_urlsafe(18)
     client_secret = secrets.token_urlsafe(32)
-    clients = _load_clients(config)
-    clients[client_id] = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "client_name": payload.get("client_name", "ChatGPT"),
-        "redirect_uris": redirect_uris,
-        "created_at": time.time(),
-    }
-    _save_clients(config, clients)
+    with _clients_write_lock(config):
+        clients = _load_clients(config)
+        clients[client_id] = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "client_name": payload.get("client_name", "ChatGPT"),
+            "redirect_uris": redirect_uris,
+            "created_at": time.time(),
+        }
+        _save_clients(config, clients)
     return {
         "client_id": client_id,
         "client_secret": client_secret,
