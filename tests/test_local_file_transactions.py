@@ -210,6 +210,53 @@ class LocalFileTransactionTests(unittest.TestCase):
             self.assertEqual(records[-1]["state"], "aborted")
             self.assertTrue(records[-1]["rolled_back"])
 
+    def test_rollback_failure_returns_transaction_id_and_unknown_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            path = config.allowed_roots[0] / "note.txt"
+            path.write_text("before", encoding="utf-8")
+            observed = local_ops.read_text(config, str(path))
+            real_fsync = recovery.fsync_directory
+            target_failures = 0
+
+            def fail_both_target_syncs(directory):
+                nonlocal target_failures
+                if Path(directory).resolve() == path.parent.resolve():
+                    target_failures += 1
+                    if target_failures <= 2:
+                        raise OSError("injected target sync failure")
+                return real_fsync(directory)
+
+            with mock.patch.object(recovery, "fsync_directory", side_effect=fail_both_target_syncs):
+                with self.assertRaisesRegex(RuntimeError, r"filetx-.*outcome_unknown; rollback failed"):
+                    local_ops.apply_patch(config, str(path), "before", "after", expected_sha256=observed["sha256"])
+            self.assertEqual(target_failures, 2)
+            self.assertEqual(path.read_text(encoding="utf-8"), "before")
+
+    def test_abort_journal_failure_returns_transaction_id_and_unknown_outcome(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            path = config.allowed_roots[0] / "note.txt"
+            path.write_text("before", encoding="utf-8")
+            observed = local_ops.read_text(config, str(path))
+            real_fsync = recovery.fsync_directory
+            failed = False
+
+            def fail_target_once(directory):
+                nonlocal failed
+                if Path(directory).resolve() == path.parent.resolve() and not failed:
+                    failed = True
+                    raise OSError("injected target sync failure")
+                return real_fsync(directory)
+
+            with (
+                mock.patch.object(recovery, "fsync_directory", side_effect=fail_target_once),
+                mock.patch.object(recovery, "append_transaction_record", side_effect=[None, OSError("journal failed")]),
+            ):
+                with self.assertRaisesRegex(RuntimeError, r"filetx-.*outcome_unknown; abort journal failed"):
+                    local_ops.apply_patch(config, str(path), "before", "after", expected_sha256=observed["sha256"])
+            self.assertEqual(path.read_text(encoding="utf-8"), "before")
+
     def test_truncated_read_cannot_authorize_whole_file_replace(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))

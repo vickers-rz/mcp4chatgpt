@@ -63,6 +63,15 @@ class PdfOpsTests(unittest.TestCase):
             pdf_ops.insert_text(self.config, str(self.source), 1, 72, 100, "new", output_path=str(destination))
         self.assertEqual(destination.read_bytes(), b"keep")
 
+    def test_unencodable_replacement_does_not_publish_partial_pdf(self):
+        destination = self.root / "unicode-replacement.pdf"
+        with self.assertRaises(Exception):
+            pdf_ops.redact_text(
+                self.config, str(self.source), "Secret", replacement="替换文字",
+                output_path=str(destination),
+            )
+        self.assertFalse(destination.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

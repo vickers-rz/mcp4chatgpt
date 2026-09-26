@@ -195,6 +195,12 @@ def redact_text(
             if rects:
                 page.apply_redactions()
                 if replacement:
+                    font = pymupdf.Font("helv")
+                    unsupported = sorted({char for char in replacement if font.has_glyph(ord(char)) == 0})
+                    if unsupported:
+                        raise ValueError(
+                            "Replacement contains characters unsupported by the built-in Helvetica font"
+                        )
                     # Place the replacement in each original match rectangle.
                     for rect in rects:
                         result = page.insert_textbox(rect, replacement, fontsize=10, fontname="helv", color=(0, 0, 0))
