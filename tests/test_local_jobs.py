@@ -270,6 +270,26 @@ def test_cancel_kills_grandchild_that_ignores_sigterm(tmp_path):
     assert not process.process_group_alive(parent.pid)
 
 
+def test_cancel_does_not_signal_supervisor_when_saved_identity_mismatches():
+    with tempfile.TemporaryDirectory() as d:
+        config = make_config(Path(d))
+        started = manager.start_job(
+            config, operation_id="stale-identity", command="sleep 5",
+            cwd=str(config.allowed_roots[0]), timeout_sec=10,
+        )
+        wait_running(config, started["job_id"])
+        store = manager._store(config)
+        store.update_metadata(started["job_id"], {"supervisor_identity": "reused-pid"})
+        result = manager.cancel_job(config, started["job_id"])
+        assert result["state"] == "unknown"
+        assert result["error"] == "process_identity_unverified"
+        assert result["cancel_requested"] is False
+        # The durable cancellation marker is observed by the live supervisor;
+        # this test only forbids signaling an unverified PID.
+        terminal = wait_terminal(config, started["job_id"])
+        assert terminal["state"] == "cancelled"
+
+
 def test_signal_process_group_permission_error_falls_back_to_group_leader() -> None:
     with (
         mock.patch.object(

@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+import threading
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -463,3 +464,51 @@ def test_nonblocking_protocol_reader_buffers_partial_and_multiple_messages():
         child.wait()
         computer_cua_backend._process = None
         computer_cua_backend._read_buffer.clear()
+
+
+def test_nonblocking_writer_times_out_when_transport_does_not_read():
+    child = subprocess.Popen([sys.executable, "-c", "import time;time.sleep(2)"], stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
+    try:
+        os.set_blocking(child.stdin.fileno(), False)
+        computer_cua_backend._process = child
+        started = time.monotonic()
+        with pytest.raises(computer_cua_backend.CUABackendError, match="cua_timeout"):
+            computer_cua_backend._send({"payload": "x" * (2 * 1024 * 1024)}, timeout=.05)
+        assert time.monotonic() - started < .25
+    finally:
+        child.kill()
+        child.wait()
+        computer_cua_backend._process = None
+
+
+def test_approval_uses_expected_operation_and_allowlisted_app_context():
+    assert computer_cua_backend._approval_allowed(
+        "type_keyboard",
+        {"_meta": {"tool_name": "paste", "riskLevel": "high", "connector_id": "other"}},
+        {"app_id": "com.apple.TextEdit", "allowed_apps": ["com.apple.TextEdit"]},
+    )
+    assert not computer_cua_backend._approval_allowed(
+        "type_keyboard", {"_meta": {"tool_name": "unknown"}},
+        {"app_id": "com.apple.TextEdit", "allowed_apps": ["com.apple.TextEdit"]},
+    )
+
+
+def test_cua_request_deadline_includes_serial_lock_wait(monkeypatch):
+    monkeypatch.setattr(computer_cua_backend, "IO_TIMEOUT", .05)
+    acquired = threading.Event()
+
+    def hold_lock():
+        with computer_cua_backend._lock:
+            acquired.set()
+            time.sleep(.2)
+
+    thread = threading.Thread(target=hold_lock)
+    thread.start()
+    assert acquired.wait(1)
+    started = time.monotonic()
+    with pytest.raises(computer_cua_backend.CUABackendError, match="cua_timeout") as error:
+        computer_cua_backend.call("get_state", {"app_id": "com.apple.TextEdit"})
+    elapsed = time.monotonic() - started
+    thread.join()
+    assert elapsed < .15
+    assert error.value.effect == "not_started"

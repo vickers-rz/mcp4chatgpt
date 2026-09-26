@@ -204,8 +204,12 @@ def run_job(store_root: Path, job_id: str) -> int:
 
                 time.sleep(0.1)
     except BaseException as exc:
+        cleanup_error = None
         if child is not None:
-            _terminate_child(child, grace_sec=0.5)
+            try:
+                _terminate_child(child, grace_sec=0.5)
+            except Exception as cleanup_exc:
+                cleanup_error = redact(str(cleanup_exc))
         current = store.read_metadata(job_id)
         if current.get("state") not in TERMINAL_STATES:
             _terminal_update(
@@ -214,7 +218,11 @@ def run_job(store_root: Path, job_id: str) -> int:
                 state="failed",
                 exit_code=child.poll() if child is not None else None,
                 started_monotonic=started_monotonic,
-                extra={"error": redact(str(exc))},
+                extra={
+                    "error": redact(str(exc)),
+                    "cleanup_incomplete": cleanup_error is not None,
+                    "cleanup_error": cleanup_error,
+                },
             )
         return 1
 

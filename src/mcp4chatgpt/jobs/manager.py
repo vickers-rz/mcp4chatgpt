@@ -93,7 +93,9 @@ def _augment_status(store: JobStore, metadata: dict[str, Any]) -> dict[str, Any]
         # briefly visible as zombies until their parent reaps them; reporting
         # those PIDs as a live job would be a semantic false positive.
         supervisor_alive = False
-        child_alive = False
+        child_alive = bool(result.get("cleanup_incomplete") and process.process_group_alive(
+            int(child_pgid) if child_pgid is not None else None
+        ))
     else:
         supervisor_alive = process.pid_alive(
             int(supervisor_pid) if supervisor_pid is not None else None

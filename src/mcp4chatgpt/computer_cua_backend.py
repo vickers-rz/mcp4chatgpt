@@ -138,13 +138,16 @@ def _codex_binary() -> str:
 
 def _effective_transport() -> tuple[list[str], dict[str, str], str]:
     codex = _codex_binary()
+    discovery_timeout = _remaining_timeout(15)
+    if discovery_timeout <= 0:
+        raise CUABackendError("cua_timeout", fallback_allowed=True)
     try:
         completed = subprocess.run(
             [codex, "mcp", "get", "cua_repl", "--json"],
             check=True,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=discovery_timeout,
         )
         payload = json.loads(completed.stdout)
     except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
@@ -369,7 +372,14 @@ def stop() -> None:
                 os.killpg(process.pid, 9)
                 process.wait(timeout=1)
             except Exception:
-                pass
+                try:
+                    process.terminate()
+                    process.wait(timeout=1)
+                except Exception:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
 
 
 atexit.register(stop)
@@ -1089,11 +1099,12 @@ def call(operation: str, args: dict[str, Any], *, effectful: bool = False) -> di
     global _active_deadline
     # Window selection and the subsequent Sky observation/action are one
     # transaction. The RLock is re-entrant because _call_js also uses it.
+    call_started = time.monotonic()
     acquired = _lock.acquire(timeout=IO_TIMEOUT)
     if not acquired:
         raise CUABackendError("cua_timeout", "not_started", fallback_allowed=not effectful)
     try:
-        _active_deadline = time.monotonic() + IO_TIMEOUT
+        _active_deadline = call_started + IO_TIMEOUT
         try:
             return _call_locked(operation, args, effectful=effectful)
         except CUABackendError as exc:
