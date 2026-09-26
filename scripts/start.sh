@@ -47,7 +47,16 @@ if command -v tmux >/dev/null 2>&1 && [ "${MCP_USE_LAUNCHD:-0}" != "1" ]; then
     tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
   fi
 
-  tmux new-session -d -s "$TMUX_SESSION" -c "$ROOT" "$ROOT/scripts/dev.sh > '$OUT_LOG' 2> '$ERR_LOG'"
+  tmux new-session -d \
+    -e "MCP_BIND_HOST=$MCP_BIND_HOST" \
+    -e "MCP_BIND_PORT=$MCP_BIND_PORT" \
+    -e "MCP_HEALTH_HOST=$MCP_HEALTH_HOST" \
+    -e "MCP_PUBLIC_BASE_URL=$MCP_PUBLIC_BASE_URL" \
+    -e "MCP_EXTERNAL_TUNNEL=$MCP_EXTERNAL_TUNNEL" \
+    -e "MCP_COMPUTER_MODE=$MCP_COMPUTER_MODE" \
+    -e "MCP_COMPUTER_ALLOWED_APPS=$MCP_COMPUTER_ALLOWED_APPS" \
+    -e "MCP_COMPUTER_BACKEND=$MCP_COMPUTER_BACKEND" \
+    -s "$TMUX_SESSION" -c "$ROOT" "$ROOT/scripts/dev.sh > '$OUT_LOG' 2> '$ERR_LOG'"
   ok=0
   for _ in 1 2 3 4 5; do
     sleep 1

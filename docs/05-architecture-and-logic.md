@@ -35,9 +35,14 @@ mcp.runzhe.uk
 MCP4ChatGPT HTTP server on 127.0.0.1:8766
   |
   +-- local_ops: files, commands, Git
+  +-- pdf_ops: PDF inspection, text search, redaction and insertion
+  +-- workspace: validated file transactions, recovery, and durable local jobs
+  +-- computer_ops: CUA/Sky routing with native macOS helper fallback
   +-- terminal_ops: co-te.py -> Terminal.app / iTerm2 / Termius
   +-- web_ops: Brave Search API + Firecrawl HTTP API
   +-- knowledge_ops: local JSON source store
+  +-- browser/ext_ops: local Chrome Extension bridge, persistent browser actions and async jobs
+  +-- downstream MCP: allowlisted client connections for selected external MCP servers
 
 Local Open WebUI
   |
@@ -94,13 +99,19 @@ Supported MCP methods:
 
 All tool schemas and handlers are declared in `src/mcp4chatgpt/tools.py`.
 The registry is the only place the HTTP layer knows about individual tools.
+Internal `workspace/worktrees.py` and `workspace/worktree_store.py` are storage
+experiments; there is no public worktree tool or `local_ops` integration today.
 
 Tool names are prefixed by capability:
 
-- `local_*`: local file, command, Git, and patch tools.
-- `terminal_*`: macOS terminal/app interaction tools.
+- `local_*`: local file, command, Git, patch, and durable job tools.
+- `pdf_*`: allowed-root PDF inspection and separate-output editing tools.
+- `computer_*`: allowlisted macOS GUI operations routed through CUA/Sky or native helpers.
+- `terminal_*`, `app_*`, and `apple_notes_*`: compatibility integrations through co-te.
+- `chrome_*`, `browser_*`, and `ext_*`: local Chrome fallback and extension-backed tools.
 - `web_*`: Brave search plus Firecrawl-backed search and page-processing tools.
 - `knowledge_*`: local source-library tools.
+- configured downstream tools are dynamically namespaced by integration.
 - `server_info`: backend status and configuration summary.
 
 This prefix split is deliberate: it helps ChatGPT choose the right capability
@@ -221,6 +232,12 @@ logs redact obvious secrets before writing command text, stdout, and stderr.
 ## Configuration
 
 Primary configuration lives in `.env`.
+Values already present in the process environment take precedence because the
+dotenv loader only fills unset variables. Startup scripts set profile values
+before loading the application: ordinary `start` defaults computer control to
+off, while explicit `start-full` uses interact mode and the configured full
+access allowlist. For tmux launches, `scripts/start.sh` passes the request's
+listener, tunnel, and computer profile values into the new session explicitly.
 
 Important variables:
 

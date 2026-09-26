@@ -36,14 +36,22 @@ Tunnel on `mcp.runzhe.uk`.
 
 ```bash
 cp .env.example .env
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+uv sync --extra dev
+.venv/bin/python -m pytest -q
 scripts/dev.sh
 ```
+
+The full pytest command includes function-style tests. Four native macOS GUI
+acceptance tests are skipped by default; run those separately on the intended
+desktop session after granting the required permissions. A passing simulated
+suite does not verify interaction with the user's live desktop.
 
 The server defaults to `127.0.0.1:8766`. Use Cloudflare Tunnel for public HTTPS.
 
 For the full architecture, request flow, data model, and deployment logic, read
 `docs/05-architecture-and-logic.md`.
+For an index that separates current implementation guidance, historical plans,
+handoffs, and review/acceptance records, read `docs/README.md`.
 
 ## Local Controller
 
@@ -219,6 +227,10 @@ fails, the original search result is retained without page markdown.
 ## Tool Groups
 
 - `local_*`: allowed-root file access, safe command execution, read-only Git, exact-text patching
+- `pdf_*`: inspect PDF metadata/text, search selectable text, permanently redact/replace text, and insert text with PyMuPDF; mutations write a separate PDF under `MCP_ALLOWED_ROOTS`
+- `computer_*`: allowlisted macOS GUI automation through CUA/Sky with native helper routing and identity-bound windows/snapshots
+- `local_*_job`: durable command jobs with status, logs, cancellation, and operation-id replay protection
+- configured downstream MCP tools: namespaced calls to the enabled integrations
 - `terminal_*`: compatibility tools for co-te terminal context/input and visible terminal commands
 - `app_*`: co-te macOS app context reads and Accessibility-backed text writeback
 - `apple_notes_*`: read-only Apple Notes SQLite inspection, listing, reading, and search through co-te
@@ -226,6 +238,7 @@ fails, the original search result is retained without page markdown.
 - `ext_*`: enhanced Chrome tab context and interaction through the optional unpacked Chrome extension
 - `web_*`: Brave search plus Firecrawl-backed search, scrape, crawl, map, extract, interact, and add-to-knowledge
 - `knowledge_*`: local source library, chunk search, source fetch, summary, study guide, quiz, flashcards
+- `ext_*_job`: durable asynchronous Chrome extension operations
 
 Firecrawl-backed tools require `FIRECRAWL_API_KEY`; Brave search requires
 `BRAVE_SEARCH_API_KEY`. If the relevant key is missing, the tools remain visible

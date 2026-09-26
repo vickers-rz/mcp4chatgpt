@@ -45,7 +45,12 @@ That profile explicitly sets `MCP_COMPUTER_MODE=interact`, `MCP_COMPUTER_ALLOWED
 
 The CUA adapter lives in `src/mcp4chatgpt/computer_cua_backend.py`. It discovers the effective Codex `cua_repl` transport through `codex mcp get cua_repl --json`, starts that MCP server, negotiates MCP elicitation support, and sends Codex turn metadata required by the OpenAI Computer Use runtime.
 
-Only low-risk internal Computer Use elicitations are auto-accepted by the adapter. Any higher-risk or non-Computer-Use elicitation is declined rather than silently approved.
+The adapter auto-accepts only operation-specific tool names expected for the
+already-authorized request and the application's validated allowlist context.
+This is delegated trust in the configured CUA transport: the adapter does not
+independently validate upstream risk levels or connector identity. Unexpected
+tool names or malformed elicitation metadata are declined. Keep the transport
+configuration and app allowlist within the same trust boundary as this service.
 
 The first CUA-backed operations are:
 
@@ -183,7 +188,10 @@ A controlled CUA-unavailable test also passed after the multi-window changes. Wi
 
 The CUA adapter returns `backend=cua`, `background_capable=true`, and CUA-bound window/snapshot identifiers on the primary route.
 
-Focused Computer Use tests currently pass 58/58. The complete project test suite passes 207 tests with 4 native acceptance tests skipped by default.
+Historical test counts in this document describe the original acceptance run
+and should not be used as current status. Current validation is recorded with a
+date and commit in `docs/15-project-review-2026-09-26.md` and the follow-up fix
+record.
 
 ## Design references
 
