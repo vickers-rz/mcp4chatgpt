@@ -19,7 +19,7 @@ class PdfOpsTests(unittest.TestCase):
         self.source = self.root / "source.pdf"
         doc = pymupdf.open()
         page = doc.new_page()
-        page.insert_text((72, 72), "Secret SECRET Straße", fontsize=11)
+        page.insert_text((72, 72), "Secret SECRET Secret Straße", fontsize=11)
         doc.save(self.source)
         doc.close()
 
@@ -33,6 +33,7 @@ class PdfOpsTests(unittest.TestCase):
     def test_redaction_respects_case_and_maps_unicode_casefold(self):
         original_hash = hashlib.sha256(self.source.read_bytes()).hexdigest()
         result = pdf_ops.redact_text(self.config, str(self.source), "Secret")
+        self.assertEqual(result["matches"], 2)
         text = self._text(result["output_path"])
         self.assertNotIn("Secret", text)
         self.assertIn("SECRET", text)

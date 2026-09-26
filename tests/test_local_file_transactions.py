@@ -210,6 +210,25 @@ class LocalFileTransactionTests(unittest.TestCase):
             self.assertEqual(records[-1]["state"], "aborted")
             self.assertTrue(records[-1]["rolled_back"])
 
+    def test_replace_failure_before_rename_preserves_original(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            path = config.allowed_roots[0] / "note.txt"
+            path.write_text("before", encoding="utf-8")
+            observed = local_ops.read_text(config, str(path))
+            recovery.persist_recovery_blob(config.audit_log.parent, b"before")
+            with mock.patch.object(
+                recovery,
+                "atomic_replace_bytes",
+                side_effect=recovery.AtomicReplaceError("rename failed", replaced=False),
+            ):
+                with self.assertRaisesRegex(OSError, "rename failed"):
+                    local_ops.apply_patch(config, str(path), "before", "after", expected_sha256=observed["sha256"])
+            self.assertEqual(path.read_text(encoding="utf-8"), "before")
+            records = [json.loads(line) for line in (config.audit_log.parent / "file_transactions.jsonl").read_text().splitlines()]
+            self.assertEqual(records[-1]["state"], "aborted")
+            self.assertFalse(records[-1]["rolled_back"])
+
     def test_rollback_failure_returns_transaction_id_and_unknown_outcome(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
