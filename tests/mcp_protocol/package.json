@@ -1,0 +1,8 @@
+{
+  "name": "mcp4chatgpt-mcpc-acceptance",
+  "private": true,
+  "description": "Pinned external MCP protocol client for opt-in acceptance tests",
+  "devDependencies": {
+    "@apify/mcpc": "0.7.0"
+  }
+}
