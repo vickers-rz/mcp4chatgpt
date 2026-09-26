@@ -185,6 +185,31 @@ class LocalFileTransactionTests(unittest.TestCase):
             self.assertEqual(updated["journal_state"], "commit_record_failed")
             self.assertIn("journal unavailable", updated["journal_warning"])
 
+    def test_replace_then_directory_fsync_failure_rolls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            path = config.allowed_roots[0] / "note.txt"
+            path.write_text("before", encoding="utf-8")
+            observed = local_ops.read_text(config, str(path))
+            real_fsync = recovery.fsync_directory
+            failed_once = False
+
+            def fail_target_dir(directory):
+                nonlocal failed_once
+                if Path(directory).resolve() == path.parent.resolve():
+                    if not failed_once:
+                        failed_once = True
+                        raise OSError("injected target directory fsync failure")
+                return real_fsync(directory)
+
+            with mock.patch.object(recovery, "fsync_directory", side_effect=fail_target_dir):
+                with self.assertRaisesRegex(OSError, "fsync failure"):
+                    local_ops.apply_patch(config, str(path), "before", "after", expected_sha256=observed["sha256"])
+            self.assertEqual(path.read_text(encoding="utf-8"), "before")
+            records = [json.loads(line) for line in (config.audit_log.parent / "file_transactions.jsonl").read_text().splitlines()]
+            self.assertEqual(records[-1]["state"], "aborted")
+            self.assertTrue(records[-1]["rolled_back"])
+
     def test_truncated_read_cannot_authorize_whole_file_replace(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))

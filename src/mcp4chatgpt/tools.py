@@ -22,7 +22,7 @@ from typing import Any, Callable
 from . import __version__
 from .audit import AuditLogger
 from .config import Config
-from . import chrome_ops, computer_ops, ext_ops, file_resources, knowledge_ops, local_ops, terminal_ops, web_ops
+from . import chrome_ops, computer_ops, ext_ops, file_resources, knowledge_ops, local_ops, pdf_ops, terminal_ops, web_ops
 from . import browser_search, web_archive
 from .mcp_types import RawMCPToolResult
 
@@ -125,6 +125,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
     allowlists, command blocking, and audit logging independently.
     """
     mutating = {
+        "pdf_redact_text", "pdf_insert_text",
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_request_permissions", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
         "local_apply_patch",
@@ -181,6 +182,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_listen_changes",
     }
     destructive = name in {
+        "pdf_redact_text", "pdf_insert_text",
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
         "local_apply_patch",
@@ -329,6 +331,10 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
     # about JSON-RPC; capability grouping and schemas live here.
     tools = [
         Tool("server_info", "Return service status, enabled backends, and safety boundaries.", _schema({}), _server_info),
+        Tool("pdf_inspect", "Read PDF metadata, table of contents, page dimensions, and extracted text from an allowed local PDF.", _schema({"path": {"type": "string"}, "max_chars": {"type": "integer", "minimum": 100, "maximum": 100000, "default": 20000}}, ["path"]), lambda c, a: pdf_ops.inspect(c, a["path"], max_chars=int(a.get("max_chars", 20000)))),
+        Tool("pdf_search_text", "Search selectable text in an allowed local PDF and return matching page numbers and rectangles.", _schema({"path": {"type": "string"}, "query": {"type": "string", "minLength": 1}, "max_results": {"type": "integer", "minimum": 1, "maximum": 500, "default": 100}}, ["path", "query"]), lambda c, a: pdf_ops.search(c, a["path"], a["query"], max_results=int(a.get("max_results", 100)))),
+        Tool("pdf_redact_text", "Permanently remove every selectable-text match from an allowed local PDF, optionally inserting replacement text. Writes a new PDF and refuses to overwrite existing files; scanned images require OCR and are not text-searchable.", _schema({"path": {"type": "string"}, "query": {"type": "string", "minLength": 1}, "replacement": {"type": "string", "default": ""}, "output_path": {"type": "string"}, "case_sensitive": {"type": "boolean", "default": True}}, ["path", "query"]), lambda c, a: pdf_ops.redact_text(c, a["path"], a["query"], replacement=a.get("replacement", ""), output_path=a.get("output_path"), case_sensitive=bool(a.get("case_sensitive", True)))),
+        Tool("pdf_insert_text", "Insert text at a page coordinate in an allowed local PDF. Page numbers are 1-based and coordinates use PDF points from the top-left. Writes a new PDF and refuses to overwrite existing files.", _schema({"path": {"type": "string"}, "page_number": {"type": "integer", "minimum": 1}, "x": {"type": "number"}, "y": {"type": "number"}, "text": {"type": "string", "minLength": 1, "maxLength": 10000}, "fontsize": {"type": "number", "minimum": 1, "maximum": 200, "default": 11}, "output_path": {"type": "string"}}, ["path", "page_number", "x", "y", "text"]), lambda c, a: pdf_ops.insert_text(c, a["path"], int(a["page_number"]), float(a["x"]), float(a["y"]), a["text"], fontsize=float(a.get("fontsize", 11)), output_path=a.get("output_path"))),
         Tool("computer_permissions", "Return current macOS Accessibility, Screen Recording, and event-posting permission status for native Computer Use.", _schema({}), lambda c, a: computer_ops.permission_status(c)),
         Tool("computer_request_permissions", "Request macOS native Computer Use permissions. This may trigger system permission prompts; a process restart can still be required after approval.", _schema({"accessibility": {"type": "boolean", "default": True}, "screen_recording": {"type": "boolean", "default": True}, "event_posting": {"type": "boolean", "default": True}}), lambda c, a: computer_ops.request_permissions(c, accessibility=bool(a.get("accessibility", True)), screen_recording=bool(a.get("screen_recording", True)), event_posting=bool(a.get("event_posting", True)))),
         Tool("computer_list_apps", "List running macOS apps in the explicit computer allowlist. In auto mode OpenAI CUA/Sky is the primary inventory source.", _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 64, "default": 32}}), lambda c, a: computer_ops.list_apps(c, int(a.get("limit", 32)))),

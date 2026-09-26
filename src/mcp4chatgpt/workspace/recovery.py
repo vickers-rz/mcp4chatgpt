@@ -60,6 +60,14 @@ def fsync_directory(path: Path) -> None:
         os.close(fd)
 
 
+class AtomicReplaceError(OSError):
+    """An atomic write failed, with the rename commit point made explicit."""
+
+    def __init__(self, message: str, *, replaced: bool) -> None:
+        super().__init__(message)
+        self.replaced = replaced
+
+
 def atomic_replace_bytes(
     target: Path,
     data: bytes,
@@ -73,6 +81,7 @@ def atomic_replace_bytes(
         dir=target.parent,
     )
     temp = Path(temp_name)
+    replaced = False
     try:
         os.fchmod(fd, stat.S_IMODE(mode) if mode is not None else 0o644)
         with os.fdopen(fd, "wb", closefd=True) as fh:
@@ -80,7 +89,10 @@ def atomic_replace_bytes(
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(temp, target)
+        replaced = True
         fsync_directory(target.parent)
+    except Exception as exc:
+        raise AtomicReplaceError(str(exc), replaced=replaced) from exc
     finally:
         try:
             temp.unlink()

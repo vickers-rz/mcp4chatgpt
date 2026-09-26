@@ -110,6 +110,7 @@ def _commit_text_transaction(
                 transaction_id=tx_id,
             )
     except Exception as exc:
+        replaced = replaced or bool(getattr(exc, "replaced", False))
         rollback_error = None
         if replaced:
             try:
@@ -120,6 +121,7 @@ def _commit_text_transaction(
                     recovery.atomic_replace_bytes(target, before, mode)
             except Exception as rollback_exc:  # pragma: no cover
                 rollback_error = recovery.redacted_error(rollback_exc)
+        journal_error = None
         try:
             recovery.append_transaction_record(
                 state_dir,
@@ -133,6 +135,7 @@ def _commit_text_transaction(
                 },
             )
         except Exception as journal_exc:
+            journal_error = recovery.redacted_error(journal_exc)
             # Preserve the actual mutation/finalize failure. Losing the ABORTED
             # audit record is important diagnostics, but must not mask the
             # original exception that determined transaction outcome.
@@ -143,6 +146,14 @@ def _commit_text_transaction(
                 )
             except AttributeError:  # pragma: no cover - Python < 3.11
                 pass
+        if replaced and rollback_error:
+            raise RuntimeError(
+                f"file transaction {tx_id} outcome_unknown; rollback failed: {rollback_error}"
+            ) from exc
+        if journal_error:
+            raise RuntimeError(
+                f"file transaction {tx_id} outcome_unknown; abort journal failed: {journal_error}"
+            ) from exc
         raise
 
     committed_record = {

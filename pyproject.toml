@@ -5,6 +5,7 @@ description = "ChatGPT Web MCP server for local ops, web ops, and source-grounde
 requires-python = ">=3.11"
 dependencies = [
     "openpyxl>=3.1.5",
+    "PyMuPDF==1.28.2",
     "websockets>=12.0",
 ]
 
