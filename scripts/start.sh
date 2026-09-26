@@ -58,7 +58,8 @@ if command -v tmux >/dev/null 2>&1 && [ "${MCP_USE_LAUNCHD:-0}" != "1" ]; then
     -e "MCP_COMPUTER_BACKEND=$MCP_COMPUTER_BACKEND" \
     -s "$TMUX_SESSION" -c "$ROOT" "$ROOT/scripts/dev.sh > '$OUT_LOG' 2> '$ERR_LOG'"
   ok=0
-  for _ in 1 2 3 4 5; do
+  # Downstream stdio servers can take longer than five seconds to initialize.
+  for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25 26 27 28 29 30; do
     sleep 1
     if curl -fsS "$LOCAL_HEALTH" >/dev/null 2>&1; then
       ok=1
