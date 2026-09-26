@@ -19,6 +19,8 @@
 - [CUA acceptance record](14-cua-final-acceptance.md): historical CUA acceptance evidence; consult the dated fix record for current tests.
 - [GUI hardening and fault review](11-handoff-macos-gui-hardening-and-fault-review.md): historical review notes.
 
+- [CUA live PDCA acceptance, 2026-09-26](19-cua-live-pdca-2026-09-26.md): owned-window transport acceptance and native/CUA token fix.
+
 ## Plans and handoffs
 
 - [Mac GUI automation handoff plan](09-gemini-handoff-macos-gui-plan.md)

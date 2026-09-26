@@ -8,6 +8,13 @@ final class Fixture: NSObject {
     var secondWindow: NSWindow?
 
     func start() {
+        let menu = NSMenu()
+        let editItem = NSMenuItem(title: "Edit", action: nil, keyEquivalent: "")
+        let editMenu = NSMenu(title: "Edit")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editItem.submenu = editMenu
+        menu.addItem(editItem)
+        NSApp.mainMenu = menu
         window = NSWindow(contentRect: NSRect(x: 250, y: 250, width: 440, height: 230), styleMask: [.titled, .closable], backing: .buffered, defer: false)
         window.title = "MCP4ChatGPT Computer Fixture"
         container = NSStackView(frame: NSRect(x: 20, y: 50, width: 400, height: 140))

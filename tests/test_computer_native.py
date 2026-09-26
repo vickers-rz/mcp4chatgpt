@@ -96,6 +96,9 @@ def test_two_windows_actions_and_failed_selection(native):
     assert selection["status"] == "window_selection_required"
     assert len(selection["windows"]) == 2
     w = next(w["window_id"] for w in selection["windows"] if w["title"] == "MCP4ChatGPT Computer Fixture")
+    assert w.startswith("native-window:")
+    inventory = computer_backend.call("list_windows", {"app_id": APP, "pid": proc.pid, "allowed_apps": [APP]})
+    assert w in {item["window_id"] for item in inventory["windows"]}
     state = computer_ops.get_state(cfg, APP, w, pid=proc.pid)
     button = next(e for e in state["elements"] if e.get("title") == "Increment 0")
     assert computer_ops.get_state(cfg, APP, "missing", pid=proc.pid)["error"] == "stale_window"
@@ -190,4 +193,3 @@ def test_display_snapshot_pointer_click_roundtrip(native):
         time.sleep(.05)
     assert latest is not None
     assert any(e.get("title") == "Increment 1" for e in latest.get("elements", [])), latest
-

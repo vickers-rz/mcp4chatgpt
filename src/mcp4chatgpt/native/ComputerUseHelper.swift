@@ -274,7 +274,7 @@ func selectedWindow(_ app: AXUIElement, running: NSRunningApplication, requested
     }
     let entries: [(String, AXUIElement)] = windows.prefix(32).map { window in
         if let existing = windowRecords.first(where: { $0.value.pid == pid && $0.value.launched == launched && axSame($0.value.window, window) }) { return (existing.key, window) }
-        let token = UUID().uuidString
+        let token = "native-window:" + UUID().uuidString
         windowRecords[token] = WindowRecord(appID: appID, pid: pid, launched: launched, window: window)
         return (token, window)
     }
