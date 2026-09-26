@@ -66,10 +66,19 @@ def test_start_replay_is_exactly_once_and_logs_use_explicit_cursors() -> None:
         assert first["launched"] is True
         assert first["replayed"] is False
 
+        real_popen = subprocess.Popen
+
+        def prohibit_job_relaunch(command, *args, **kwargs):
+            # Identity/liveness observation may invoke ps; replay must never
+            # launch another supervisor or job command.
+            if isinstance(command, list) and command[0] == 'ps':
+                return real_popen(command, *args, **kwargs)
+            raise AssertionError('replay must not spawn another job')
+
         with mock.patch.object(
             manager.subprocess,
             "Popen",
-            side_effect=AssertionError("replay must not spawn"),
+            side_effect=prohibit_job_relaunch,
         ):
             replay = manager.start_job(
                 config,

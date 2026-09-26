@@ -109,11 +109,16 @@ def _line_matches(page, query: str, *, case_sensitive: bool):
             folded_parts = [(c if case_sensitive else c.casefold()) for c in original]
             haystack = "".join(folded_parts)
             offsets = []
+            boundaries = {0}
             for index, part in enumerate(folded_parts):
                 offsets.extend([index] * len(part))
+                boundaries.add(len(offsets))
             start = 0
             while needle and (position := haystack.find(needle, start)) >= 0:
                 end = position + len(needle)
+                if position not in boundaries or end not in boundaries:
+                    start = position + 1
+                    continue
                 if end <= len(offsets):
                     selected = chars[offsets[position]:offsets[end - 1] + 1]
                     boxes = [c.get("bbox") for c in selected if c.get("bbox")]
@@ -195,6 +200,13 @@ def redact_text(
             if rects:
                 page.apply_redactions()
                 if replacement:
+                    # insert_textbox with the built-in Helvetica simple font
+                    # writes Latin-1; Font.has_glyph alone also accepts glyphs
+                    # that this encoding cannot represent (for example Ω).
+                    try:
+                        replacement.encode('latin-1', errors='strict')
+                    except UnicodeEncodeError as exc:
+                        raise ValueError('Replacement contains characters unsupported by the built-in Helvetica encoding') from exc
                     font = pymupdf.Font("helv")
                     unsupported = sorted({char for char in replacement if font.has_glyph(ord(char)) == 0})
                     if unsupported:

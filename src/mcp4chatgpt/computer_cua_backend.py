@@ -226,7 +226,7 @@ def _read_message(timeout: float) -> dict[str, Any]:
         raise CUABackendError("cua_protocol_error")
     try:
         value = json.loads(line.decode("utf-8"))
-    except json.JSONDecodeError as exc:
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise CUABackendError("cua_protocol_error") from exc
     if not isinstance(value, dict):
         raise CUABackendError("cua_protocol_error")
@@ -271,7 +271,7 @@ def _wait_response(
         try:
             message = _read_message(remaining)
         except CUABackendError as exc:
-            if effectful and exc.code in {"cua_timeout", "cua_disconnected", "cua_not_running"}:
+            if effectful and exc.code in {"cua_timeout", "cua_disconnected", "cua_not_running", "cua_protocol_error"}:
                 raise CUABackendError(exc.code, "outcome_unknown", fallback_allowed=False) from exc
             raise
 

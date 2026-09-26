@@ -80,14 +80,15 @@ def _augment_status(store: JobStore, metadata: dict[str, Any]) -> dict[str, Any]
     child_pgid = result.get("child_pgid")
     if state not in TERMINAL_STATES:
         expected = result.get("supervisor_identity")
-        if expected is None:
+        actual = process.process_identity(int(supervisor_pid)) if supervisor_pid is not None and expected is not None else None
+        if expected is None or actual is None or actual != expected:
             result["state"] = "unknown"
             result["process_identity_verified"] = False
             result["supervisor_alive"] = False
             result["child_alive"] = False
             result["process_alive"] = False
             return result
-        result["process_identity_verified"] = None
+        result["process_identity_verified"] = True
     if state in TERMINAL_STATES:
         # Terminal metadata is authoritative. Detached supervisors may remain
         # briefly visible as zombies until their parent reaps them; reporting

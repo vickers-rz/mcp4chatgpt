@@ -10,6 +10,10 @@
 
 ## Reviews and acceptance
 
+- [A1–A4 PDCA fix record](18-pdca-acceptance-fixes.md): follow-up fixes, regression results, and remaining deployment acceptance boundary.
+
+- [Independent acceptance, 2026-09-26](17-acceptance-2026-09-26.md): latest acceptance decision and remaining blockers.
+
 - [Project review, 2026-09-26](15-project-review-2026-09-26.md): pre-fix findings and architecture/documentation review.
 - [Reliability fix and acceptance record, 2026-09-26](16-reliability-fix-record-2026-09-26.md): current status for those findings and verification results.
 - [CUA acceptance record](14-cua-final-acceptance.md): historical CUA acceptance evidence; consult the dated fix record for current tests.
