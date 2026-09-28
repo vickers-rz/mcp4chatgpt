@@ -13,6 +13,8 @@
 
 ## Reviews and acceptance
 
+- [Operations store prototype, 2026-09-28](30-operations-store-prototype-2026-09-28.md): isolated SQLite operation ledger, idempotency, revision CAS, and process-crash tests; not connected to production tools.
+
 - [Foundation baseline and manual benchmark, 2026-09-28](29-foundation-baseline-and-manual-benchmark-2026-09-28.md): captured baseline, fixed benchmark results, ChatGPT manual comparison kit, and transaction contract v0.1.
 
 - [Transaction improvement plan and feasibility, 2026-09-28](28-transaction-improvement-plan-and-feasibility-2026-09-28.md): proposed guarantees, recovery architecture, phased implementation, cost estimates, and acceptance criteria for files, commands, coding, and GUI.

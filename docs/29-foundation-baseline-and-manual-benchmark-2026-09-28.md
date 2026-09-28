@@ -123,6 +123,8 @@ MCP_FULL_TOOL_EXPOSURE=compact ./MCP4ChatGPT.command restart-full
 
 ## 6. 下一批具体工作
 
+后续进展：独立操作记录层和进程崩溃测试已实现，见 [文档 30](30-operations-store-prototype-2026-09-28.md)。文件执行器、Jobs 接入和手工 pilot 仍待开展。以下保留本轮结束时的计划。
+
 1. 审查 baseline 与当前 diff，建立保留未提交改动的可恢复开发基线。
 2. 实现独立 operations store 原型与状态迁移测试，不接生产流量。
 3. 注入登记、执行领取、文件替换、结果记账之间的崩溃；验证观察无副作用。
