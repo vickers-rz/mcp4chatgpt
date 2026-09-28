@@ -344,9 +344,9 @@ interactive_menu() {
     cat <<EOF
 
 Choose an action:
-  1) Start
+  1) Start current profile (fresh menu defaults to LOCAL ONLY)
   2) Stop
-  3) Restart
+  3) Restart current profile (fresh menu defaults to LOCAL ONLY)
   4) Check health
   5) Tail logs
   6) Open logs folder
@@ -354,8 +354,8 @@ Choose an action:
   8) Audit Codex/co-te helpers
   9) Clean-restart MCP and helpers
   10) Print Connector URL
-  11) Start full-access self-use profile
-  12) Restart full-access self-use profile
+  11) Start personal full-access PUBLIC profile
+  12) Restart personal full-access PUBLIC profile (ChatGPT / 4GPT)
   13) Start/restart safe public OAuth profile
   q) Quit
 EOF

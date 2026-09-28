@@ -3,6 +3,7 @@
 ## Current implementation and operation
 
 - [Architecture and logic](05-architecture-and-logic.md): runtime topology, request flow, configuration, and deployment.
+- [Personal full-access implementation and acceptance](26-personal-full-access-plan.md): implemented personal full-access profile covering co-te, shell/rm, raw response output, and full Computer Use while retaining authentication, audit, workspace transactions, durable-job semantics, and capability/backend identity checks.
 - [mcpc protocol acceptance](20-mcpc-protocol-acceptance.md): pinned external MCP client protocol tests and OAuth acceptance limits.
 - [Capability orchestration design](21-capability-orchestration-design.md): next-stage isolated read-only composition proposal.
 - [macOS Computer Use](macos-computer-use.md): CUA/native routing, permissions, allowlists, and trust boundary.
@@ -35,7 +36,6 @@
 
 ## Plans and handoffs
 
-- [Personal full-access plan (deferred)](26-personal-full-access-plan.md): saved future co-te/rm/raw-output plan; not part of the current implementation round.
 - [Mac GUI automation handoff plan](09-gemini-handoff-macos-gui-plan.md)
 - [Coding capability handoff plan](10-gemini-handoff-codexpro-coding-plan.md)
 - [Browser bridge reference and roadmap](07-browser-bridge-reference-and-roadmap.md)
