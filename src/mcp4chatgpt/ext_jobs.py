@@ -35,7 +35,7 @@ from urllib.parse import urlparse
 
 from . import ext_bridge
 from .config import Config
-from .safety import redact
+from .safety import response_redact
 
 log = logging.getLogger(__name__)
 
@@ -83,8 +83,10 @@ class ExtensionJobManager:
         *,
         ttl_sec: int = _DEFAULT_TTL_SEC,
         max_concurrent_jobs: int = _MAX_CONCURRENT_JOBS,
+        personal_full_access: bool = False,
     ) -> None:
         self.root = (data_dir / "jobs").expanduser().resolve()
+        self.personal_full_access = bool(personal_full_access)
         self.root.mkdir(parents=True, exist_ok=True)
         self.ttl_sec = max(60, int(ttl_sec))
         self._lock = threading.RLock()
@@ -612,14 +614,13 @@ class ExtensionJobManager:
             )
         self._validate_json_size(initial_checkpoint, _MAX_CHECKPOINT_BYTES, "initial_checkpoint")
 
-    @staticmethod
-    def _bounded_error(error: str | None) -> str | None:
+    def _bounded_error(self, error: str | None) -> str | None:
         if error is None:
             return None
-        return str(error)[:_MAX_ERROR_CHARS]
+        value = str(error)
+        return value if self.personal_full_access else value[:_MAX_ERROR_CHARS]
 
-    @staticmethod
-    def _public_state(state: dict[str, Any]) -> dict[str, Any]:
+    def _public_state(self, state: dict[str, Any]) -> dict[str, Any]:
         return {
             "job_id": state.get("job_id"),
             "state": state.get("state"),
@@ -634,7 +635,7 @@ class ExtensionJobManager:
             "cancel_requested": bool(state.get("cancel_requested", False)),
             "tab_id": state.get("tab_id"),
             "origin": state.get("origin"),
-            "initial_url": redact(str(state.get("initial_url") or "")),
+            "initial_url": response_redact(self, str(state.get("initial_url") or "")),
         }
 
 
@@ -647,8 +648,13 @@ def get_job_manager(config: Config) -> ExtensionJobManager:
     with _MANAGERS_LOCK:
         manager = _MANAGERS.get(key)
         if manager is None:
-            manager = ExtensionJobManager(key)
+            manager = ExtensionJobManager(
+                key,
+                personal_full_access=getattr(config, "personal_full_access", False),
+            )
             _MANAGERS[key] = manager
+        else:
+            manager.personal_full_access = bool(getattr(config, "personal_full_access", False))
         return manager
 
 

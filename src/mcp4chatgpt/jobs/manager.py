@@ -135,7 +135,7 @@ def start_job(
     """
 
     operation_id = _validate_operation_id(operation_id)
-    command = validate_command(command)
+    command = validate_command(command, personal_full_access=getattr(config, "personal_full_access", False))
     resolved_cwd = resolve_allowed_path(
         cwd or ".",
         config.allowed_roots,

@@ -11,6 +11,8 @@ Responsibilities:
 from __future__ import annotations
 
 import logging
+import threading
+from copy import deepcopy
 from typing import Any
 
 from .client import StdioMCPClient, StdioMCPClientError
@@ -35,6 +37,7 @@ class DownstreamMCPManager:
     """
 
     def __init__(self) -> None:
+        self._catalog_lock = threading.RLock()
         self._clients: dict[str, StdioMCPClient] = {}
         self._configs: dict[str, DownstreamConfig] = {}
         self._tools: dict[str, DownstreamToolInfo] = {}  # namespaced_name -> info
@@ -104,12 +107,11 @@ class DownstreamMCPManager:
             )
             client.start()
 
-            self._clients[cfg.id] = client
-            self._states[cfg.id] = DownstreamState.RUNNING
-            self._errors.pop(cfg.id, None)
-
-            # Discover and register tools
-            self._register_tools(cfg, client)
+            with self._catalog_lock:
+                self._clients[cfg.id] = client
+                self._states[cfg.id] = DownstreamState.RUNNING
+                self._errors.pop(cfg.id, None)
+                self._register_tools(cfg, client)
 
             log.info(
                 "downstream manager: %r started (pid=%s, tools=%d)",
@@ -130,7 +132,9 @@ class DownstreamMCPManager:
         self, cfg: DownstreamConfig, client: StdioMCPClient,
     ) -> None:
         """Register downstream tools with namespace prefix and filtering."""
-        for tool in client.tools:
+        replacement: dict[str, DownstreamToolInfo] = {}
+        instance_id, tools = client.catalog_snapshot()
+        for tool in tools:
             original_name = tool.get("name", "")
             if not original_name:
                 continue
@@ -161,8 +165,14 @@ class DownstreamMCPManager:
                 downstream_id=cfg.id,
                 annotations=tool.get("annotations") if isinstance(tool.get("annotations"), dict) else None,
                 output_schema=tool.get("outputSchema") if isinstance(tool.get("outputSchema"), dict) else None,
+                backend_instance_id=instance_id,
             )
-            self._tools[namespaced] = info
+            replacement[namespaced] = info
+        with self._catalog_lock:
+            self._tools = {
+                name: info for name, info in self._tools.items()
+                if info.downstream_id != cfg.id
+            } | replacement
 
     def stop_all(self, timeout: float = 15.0) -> None:
         """Stop all downstream MCP clients gracefully."""
@@ -180,34 +190,47 @@ class DownstreamMCPManager:
             else:
                 self._states[ds_id] = DownstreamState.STOPPED
 
-        self._clients.clear()
-        self._tools.clear()
+        with self._catalog_lock:
+            self._clients.clear()
+            self._tools.clear()
 
     # ── Tool aggregation ────────────────────────────────────────
 
     def get_tools(self) -> list[DownstreamToolInfo]:
         """Return all registered downstream tools."""
-        return list(self._tools.values())
+        with self._catalog_lock:
+            for ds_id, client in self._clients.items():
+                self._register_tools(self._configs[ds_id], client)
+            return deepcopy(list(self._tools.values()))
 
     def has_tool(self, namespaced_name: str) -> bool:
         """Check if a namespaced tool name belongs to a downstream."""
-        return namespaced_name in self._tools
+        with self._catalog_lock:
+            return namespaced_name in self._tools
 
     def call_tool(
         self, namespaced_name: str, arguments: dict[str, Any],
+        *, expected_tool: DownstreamToolInfo | None = None,
     ) -> dict[str, Any]:
         """Route a tool call to the appropriate downstream client.
 
         Returns the raw MCP result from the downstream server.
         Raises StdioMCPClientError on failure.
         """
-        info = self._tools.get(namespaced_name)
+        self.get_tools()
+        with self._catalog_lock:
+            info = self._tools.get(namespaced_name)
+            if (expected_tool is not None and info is not None
+                    and info.backend_instance_id != expected_tool.backend_instance_id):
+                raise StdioMCPClientError("capability_backend_changed")
+            if expected_tool is not None and info != expected_tool:
+                raise StdioMCPClientError("capability_definition_changed")
+            client = self._clients.get(info.downstream_id) if info else None
         if info is None:
             raise StdioMCPClientError(
                 f"Unknown downstream tool: {namespaced_name}"
             )
 
-        client = self._clients.get(info.downstream_id)
         if client is None:
             raise StdioMCPClientError(
                 f"Downstream {info.downstream_id!r} is not running"
@@ -222,6 +245,9 @@ class DownstreamMCPManager:
             )
 
         try:
+            if isinstance(client, StdioMCPClient):
+                return client.call_tool(info.original_name, arguments,
+                                        expected_instance_id=info.backend_instance_id)
             return client.call_tool(info.original_name, arguments)
         except StdioMCPClientError as exc:
             # A single tool-level JSON-RPC error does not necessarily mean the
@@ -235,6 +261,7 @@ class DownstreamMCPManager:
 
     def get_status(self) -> dict[str, Any]:
         """Return aggregated status for all downstream MCPs."""
+        tools = self.get_tools()
         statuses: list[dict[str, Any]] = []
         for ds_id, cfg in self._configs.items():
             client = self._clients.get(ds_id)
@@ -253,19 +280,23 @@ class DownstreamMCPManager:
                 state=state,
                 pid=client.pid if client else None,
                 tool_count=sum(
-                    1 for t in self._tools.values()
+                    1 for t in tools
                     if t.downstream_id == ds_id
                 ),
                 last_error=self._errors.get(ds_id),
                 started_at=client.started_at if client else None,
             )
-            statuses.append(status.to_dict())
+            record = status.to_dict()
+            if client is not None and client.catalog_error:
+                record["catalog_error"] = client.catalog_error
+            statuses.append(record)
 
         return {"downstream": statuses}
 
     def is_downstream_tool(self, name: str) -> bool:
         """Check if a tool name looks like a downstream-namespaced tool."""
-        return _NS_SEP in name and name in self._tools
+        with self._catalog_lock:
+            return _NS_SEP in name and name in self._tools
 
     # ── Namespace helpers ───────────────────────────────────────
 

@@ -12,6 +12,15 @@
 
 ## Reviews and acceptance
 
+- [Foundation baseline and manual benchmark, 2026-09-28](29-foundation-baseline-and-manual-benchmark-2026-09-28.md): captured baseline, fixed benchmark results, ChatGPT manual comparison kit, and transaction contract v0.1.
+
+- [Transaction improvement plan and feasibility, 2026-09-28](28-transaction-improvement-plan-and-feasibility-2026-09-28.md): proposed guarantees, recovery architecture, phased implementation, cost estimates, and acceptance criteria for files, commands, coding, and GUI.
+
+- [Cloudflare Code Mode reassessment / P0–P3](25-cloudflare-code-mode-reassessment.md): current discovery, benchmark, P3 evidence gates, and implementation record.
+- [Discovery fixes, 2026-09-27](24-discovery-fixes-2026-09-27.md): fixes for R1–R8, real downstream updates, and mcpc failure cleanup.
+
+- [Discovery Plan review, 2026-09-27](23-discovery-plan-review-2026-09-27.md): current uncommitted catalog changes, confirmed defects, protocol tests, and remaining acceptance gaps.
+
 - [A1–A4 PDCA fix record](18-pdca-acceptance-fixes.md): follow-up fixes, regression results, and remaining deployment acceptance boundary.
 
 - [Independent acceptance, 2026-09-26](17-acceptance-2026-09-26.md): latest acceptance decision and remaining blockers.
@@ -26,6 +35,7 @@
 
 ## Plans and handoffs
 
+- [Personal full-access plan (deferred)](26-personal-full-access-plan.md): saved future co-te/rm/raw-output plan; not part of the current implementation round.
 - [Mac GUI automation handoff plan](09-gemini-handoff-macos-gui-plan.md)
 - [Coding capability handoff plan](10-gemini-handoff-codexpro-coding-plan.md)
 - [Browser bridge reference and roadmap](07-browser-bridge-reference-and-roadmap.md)

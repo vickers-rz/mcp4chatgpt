@@ -50,6 +50,27 @@ def wait_running(config: SimpleNamespace, job_id: str, timeout: float = 3.0) -> 
     pytest.fail(f"job {job_id} did not start")
 
 
+def test_personal_full_access_job_allows_rm() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        config = make_config(Path(d))
+        config.personal_full_access = True
+        root = config.allowed_roots[0]
+        victim = root / "victim"
+        victim.mkdir()
+        (victim / "x.txt").write_text("x", encoding="utf-8")
+        started = manager.start_job(
+            config,
+            operation_id="full-access-rm-1",
+            command="rm -rf victim",
+            cwd=str(root),
+            timeout_sec=10,
+        )
+        terminal = wait_terminal(config, started["job_id"])
+        assert terminal["state"] == "succeeded"
+        assert terminal["exit_code"] == 0
+        assert not victim.exists()
+
+
 def test_start_replay_is_exactly_once_and_logs_use_explicit_cursors() -> None:
     with tempfile.TemporaryDirectory() as d:
         config = make_config(Path(d))

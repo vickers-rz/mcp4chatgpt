@@ -22,7 +22,14 @@ from typing import Any
 
 from .config import Config
 from .jobs import manager as job_manager
-from .safety import redact, resolve_allowed_path, truncate_text, validate_command
+from .safety import (
+    redact,
+    resolve_allowed_path,
+    response_text,
+    response_truncate,
+    truncate_text,
+    validate_command,
+)
 from .workspace import recovery, transactions, versioning
 
 
@@ -194,11 +201,16 @@ def read_text(config: Config, path: str, max_chars: int | None = None) -> dict[s
         decoded = raw.decode("utf-8", errors="replace")
         utf8_lossless = False
 
-    redacted_text = redact(decoded)
-    visible_text, truncated = truncate_text(
-        redacted_text,
-        max_chars if max_chars is not None else config.max_output_chars,
-    )
+    if getattr(config, "personal_full_access", False):
+        redacted_text = decoded
+        visible_text = decoded
+        truncated = False
+    else:
+        redacted_text = redact(decoded)
+        visible_text, truncated = truncate_text(
+            redacted_text,
+            max_chars if max_chars is not None else config.max_output_chars,
+        )
 
     blocked_reason = None
     if truncated:
@@ -267,7 +279,8 @@ def apply_patch(
         new,
         expected_sha256=expected_sha256,
     )
-    result["diff"], result["truncated"] = truncate_text(
+    result["diff"], result["truncated"] = response_truncate(
+        config,
         result["diff"],
         config.max_output_chars,
     )
@@ -335,8 +348,8 @@ def _run(config: Config, args: list[str], cwd: str | None, timeout_sec: int = 30
         timeout_sec=timeout_sec,
     )
     duration_ms = int((time.time() - start) * 1000)
-    stdout, stdout_truncated = truncate_text(redact(proc.stdout), config.max_output_chars)
-    stderr, stderr_truncated = truncate_text(redact(proc.stderr), config.max_output_chars)
+    stdout, stdout_truncated = response_text(config, proc.stdout, config.max_output_chars)
+    stderr, stderr_truncated = response_text(config, proc.stderr, config.max_output_chars)
     return {
         "cwd": str(resolved_cwd),
         "exit_code": proc.returncode,
@@ -352,7 +365,7 @@ def run_command(config: Config, command: str, cwd: str | None = None, timeout_se
     start = time.time()
     timeout_sec = _clamp_timeout(timeout_sec)
     try:
-        command = validate_command(command)
+        command = validate_command(command, personal_full_access=getattr(config, "personal_full_access", False))
         resolved_cwd = resolve_allowed_path(cwd or ".", config.allowed_roots, must_exist=True)
     except Exception as exc:
         duration_ms = int((time.time() - start) * 1000)
@@ -400,8 +413,8 @@ def run_command(config: Config, command: str, cwd: str | None = None, timeout_se
         )
         raise
     duration_ms = int((time.time() - start) * 1000)
-    stdout, stdout_truncated = truncate_text(redact(proc.stdout), config.max_output_chars)
-    stderr, stderr_truncated = truncate_text(redact(proc.stderr), config.max_output_chars)
+    stdout, stdout_truncated = response_text(config, proc.stdout, config.max_output_chars)
+    stderr, stderr_truncated = response_text(config, proc.stderr, config.max_output_chars)
     _write_command_log(
         config,
         _command_log_record(
@@ -437,7 +450,7 @@ def git_diff(config: Config, cwd: str, staged: bool = False, max_chars: int | No
         args.append("--staged")
     result = _run(config, args, cwd)
     if max_chars:
-        result["stdout"], result["truncated"] = truncate_text(result["stdout"], max_chars)
+        result["stdout"], result["truncated"] = response_truncate(config, result["stdout"], max_chars)
     return result
 
 
@@ -449,5 +462,5 @@ def git_log(config: Config, cwd: str, limit: int = 20) -> dict[str, Any]:
 def git_show(config: Config, cwd: str, rev: str = "HEAD", max_chars: int | None = None) -> dict[str, Any]:
     result = _run(config, ["git", "show", "--no-ext-diff", "--stat", "--patch", rev], cwd)
     if max_chars:
-        result["stdout"], result["truncated"] = truncate_text(result["stdout"], max_chars)
+        result["stdout"], result["truncated"] = response_truncate(config, result["stdout"], max_chars)
     return result

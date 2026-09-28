@@ -11,7 +11,7 @@ MCP_COMPUTER_MODE="${MCP_COMPUTER_MODE:-off}"
 MCP_COMPUTER_ALLOWED_APPS="${MCP_COMPUTER_ALLOWED_APPS:-}"
 MCP_COMPUTER_BACKEND="${MCP_COMPUTER_BACKEND:-auto}"
 export MCP_BIND_HOST MCP_BIND_PORT MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL MCP_HEALTH_HOST
-export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND
+export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND MCP_PERSONAL_FULL_ACCESS
 LOCAL_HEALTH=""
 PUBLIC_HEALTH="${MCP_PUBLIC_BASE_URL%/}/health"
 CONNECTOR_URL="${MCP_PUBLIC_BASE_URL%/}/mcp"
@@ -46,9 +46,13 @@ MCP4ChatGPT control
 
 Usage:
   ./MCP4ChatGPT.command start       Start with safe local defaults
+  ./MCP4ChatGPT.command start-public
+                                    Start/restart safe public OAuth profile
   ./MCP4ChatGPT.command start-full  Start explicit full-access self-use profile
   ./MCP4ChatGPT.command stop        Stop MCP service and optional Cloudflare Tunnel
   ./MCP4ChatGPT.command restart     Restart with safe local defaults
+  ./MCP4ChatGPT.command restart-public
+                                    Restart safe public OAuth profile
   ./MCP4ChatGPT.command restart-full
                                     Restart explicit full-access self-use profile
   ./MCP4ChatGPT.command clean-restart
@@ -158,6 +162,29 @@ status() {
   echo "Bind host: $MCP_BIND_HOST"
 }
 
+enable_public_profile() {
+  MCP_TOOL_EXPOSURE="${MCP_PUBLIC_TOOL_EXPOSURE:-compact}"
+  export MCP_TOOL_EXPOSURE
+  MCP_BIND_HOST="${MCP_PUBLIC_BIND_HOST:-0.0.0.0}"
+  MCP_PUBLIC_BASE_URL="${MCP_PUBLIC_PROFILE_BASE_URL:-https://mcp.runzhe.uk}"
+  MCP_EXTERNAL_TUNNEL="${MCP_PUBLIC_EXTERNAL_TUNNEL:-1}"
+  MCP_COMPUTER_MODE="off"
+  MCP_COMPUTER_ALLOWED_APPS=""
+  MCP_COMPUTER_BACKEND="auto"
+  MCP_PERSONAL_FULL_ACCESS="0"
+  export MCP_BIND_HOST MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL
+  export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND MCP_PERSONAL_FULL_ACCESS
+  LOCAL_HEALTH="http://$(health_host):${MCP_BIND_PORT}/health"
+  PUBLIC_HEALTH="${MCP_PUBLIC_BASE_URL%/}/health"
+  CONNECTOR_URL="${MCP_PUBLIC_BASE_URL%/}/mcp"
+}
+
+restart_public_profile() {
+  enable_public_profile
+  stop_all
+  start_all
+}
+
 enable_full_access_profile() {
   MCP_BIND_HOST="${MCP_FULL_BIND_HOST:-0.0.0.0}"
   MCP_PUBLIC_BASE_URL="${MCP_FULL_PUBLIC_BASE_URL:-https://mcp.runzhe.uk}"
@@ -165,8 +192,10 @@ enable_full_access_profile() {
   MCP_COMPUTER_MODE="${MCP_FULL_COMPUTER_MODE:-interact}"
   MCP_COMPUTER_ALLOWED_APPS="${MCP_FULL_COMPUTER_ALLOWED_APPS:-*}"
   MCP_COMPUTER_BACKEND="${MCP_FULL_COMPUTER_BACKEND:-auto}"
-  export MCP_BIND_HOST MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL
-  export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND
+  MCP_PERSONAL_FULL_ACCESS="${MCP_FULL_PERSONAL_FULL_ACCESS:-1}"
+  MCP_TOOL_EXPOSURE="${MCP_FULL_TOOL_EXPOSURE:-compact}"
+  export MCP_BIND_HOST MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL MCP_TOOL_EXPOSURE
+  export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND MCP_PERSONAL_FULL_ACCESS
   LOCAL_HEALTH="http://$(health_host):${MCP_BIND_PORT}/health"
   PUBLIC_HEALTH="${MCP_PUBLIC_BASE_URL%/}/health"
   CONNECTOR_URL="${MCP_PUBLIC_BASE_URL%/}/mcp"
@@ -327,6 +356,7 @@ Choose an action:
   10) Print Connector URL
   11) Start full-access self-use profile
   12) Restart full-access self-use profile
+  13) Start/restart safe public OAuth profile
   q) Quit
 EOF
     printf "> "
@@ -345,6 +375,7 @@ EOF
       10) echo "$CONNECTOR_URL"; action_status=$? ;;
       11) start_full_access; action_status=$? ;;
       12) restart_full_access; action_status=$? ;;
+      13) restart_public_profile; action_status=$? ;;
       q|Q) exit 0 ;;
       *) echo "Unknown choice: $choice"; action_status=2 ;;
     esac
@@ -362,9 +393,11 @@ EOF
 cmd="${1:-menu}"
 case "$cmd" in
   start) start_all ;;
+  start-public|public-start) restart_public_profile ;;
   start-full|full-start) start_full_access ;;
   stop) stop_all ;;
   restart) restart_all ;;
+  restart-public|public-restart) restart_public_profile ;;
   restart-full|full-restart) restart_full_access ;;
   clean-restart|restart-clean) clean_restart_all ;;
   status) status ;;

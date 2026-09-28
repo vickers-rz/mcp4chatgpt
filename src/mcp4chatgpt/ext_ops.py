@@ -21,7 +21,7 @@ from typing import Any
 from . import ext_bridge
 from .config import Config
 from .ext_jobs import get_job_manager
-from .safety import redact, truncate_text
+from .safety import response_redact, response_truncate
 
 
 class ExtNotConnectedError(RuntimeError):
@@ -69,8 +69,8 @@ def ext_list_tabs(config: Config, max_tabs: int = 100) -> dict[str, Any]:
             "index": t.get("index"),
             "active": t.get("active", False),
             "pinned": t.get("pinned", False),
-            "title": redact(str(t.get("title", ""))),
-            "url": redact(str(t.get("url", ""))),
+            "title": response_redact(config, str(t.get("title", ""))),
+            "url": response_redact(config, str(t.get("url", ""))),
             "status": t.get("status", ""),
         }
         for t in (tabs if isinstance(tabs, list) else [])
@@ -106,22 +106,22 @@ def ext_get_active_tab(
         timeout=20,
     )
     out: dict[str, Any] = {
-        "title": redact(str(result.get("title", ""))),
-        "url": redact(str(result.get("url", ""))),
+        "title": response_redact(config, str(result.get("title", ""))),
+        "url": response_redact(config, str(result.get("url", ""))),
         "tab_id": result.get("tabId"),
         "window_id": result.get("windowId"),
     }
     if include_meta:
         out["meta"] = {
-            redact(str(k)): redact(str(v))
+            response_redact(config, str(k)): response_redact(config, str(v))
             for k, v in (result.get("meta") or {}).items()
         }
     if include_selection:
-        sel, sel_trunc = truncate_text(redact(str(result.get("selection", ""))), max_chars)
+        sel, sel_trunc = response_truncate(config, response_redact(config, str(result.get("selection", ""))), max_chars)
         out["selection"] = sel
         out["selection_truncated"] = sel_trunc
     if include_text:
-        text, text_trunc = truncate_text(redact(str(result.get("text", ""))), max_chars)
+        text, text_trunc = response_truncate(config, response_redact(config, str(result.get("text", ""))), max_chars)
         out["text"] = text
         out["text_truncated"] = text_trunc
     return out
@@ -145,10 +145,10 @@ def ext_get_dom(
         args["tabId"] = tab_id
     result = ext_bridge.send_command("get_dom", args, timeout=20)
     html_raw = str(result.get("html", ""))
-    html, truncated = truncate_text(html_raw, max_chars)
+    html, truncated = response_truncate(config, html_raw, max_chars)
     return {
         "tab_id": result.get("tabId"),
-        "url": redact(str(result.get("url", ""))),
+        "url": response_redact(config, str(result.get("url", ""))),
         "selector": selector,
         "html": html,
         "truncated": truncated,
@@ -169,8 +169,8 @@ def ext_get_selection(config: Config, tab_id: int | None = None) -> dict[str, An
     result = ext_bridge.send_command("get_selection", args, timeout=10)
     return {
         "tab_id": result.get("tabId"),
-        "url": redact(str(result.get("url", ""))),
-        "selection": redact(str(result.get("selection", ""))),
+        "url": response_redact(config, str(result.get("url", ""))),
+        "selection": response_redact(config, str(result.get("selection", ""))),
     }
 
 
@@ -202,7 +202,7 @@ def ext_screenshot(
 
     out: dict[str, Any] = {
         "tab_id": result.get("tabId"),
-        "url": redact(str(result.get("url", ""))),
+        "url": response_redact(config, str(result.get("url", ""))),
         "width": result.get("width"),
         "height": result.get("height"),
         "format": "png",
@@ -245,7 +245,7 @@ def ext_navigate(
     result = ext_bridge.send_command("navigate", args, timeout=30)
     return {
         "tab_id": result.get("tabId"),
-        "url": redact(str(result.get("url", url))),
+        "url": response_redact(config, str(result.get("url", url))),
         "status": result.get("status", "navigating"),
     }
 
@@ -271,7 +271,7 @@ def ext_click_element(
         "tab_id": result.get("tabId"),
         "selector": selector,
         "clicked": result.get("clicked", False),
-        "element_text": redact(str(result.get("elementText", ""))),
+        "element_text": response_redact(config, str(result.get("elementText", ""))),
     }
 
 
@@ -356,7 +356,7 @@ def ext_run_js(
         if not isinstance(raw_result, str)
         else raw_result
     )
-    result_str, truncated = truncate_text(result_str, max_chars)
+    result_str, truncated = response_truncate(config, result_str, max_chars)
     return {
         "tab_id": result.get("tabId"),
         "result": result_str,
@@ -446,8 +446,8 @@ def ext_listen_changes(
                 {
                     "type": evt.get("event"),
                     "tab_id": evt.get("tabId"),
-                    "url": redact(str(evt.get("url", ""))),
-                    "title": redact(str(evt.get("title", ""))),
+                    "url": response_redact(config, str(evt.get("url", ""))),
+                    "title": response_redact(config, str(evt.get("title", ""))),
                     "timestamp": evt.get("timestamp", time.time()),
                 }
             )

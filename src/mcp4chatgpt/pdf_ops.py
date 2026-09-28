@@ -12,7 +12,7 @@ import tempfile
 from typing import Any
 
 from .config import Config
-from .safety import resolve_allowed_path, truncate_text
+from .safety import resolve_allowed_path, response_truncate
 
 
 def _pymupdf():
@@ -139,19 +139,23 @@ def inspect(config: Config, path: str, *, max_chars: int = 20000) -> dict[str, A
             raise ValueError(f"Not a valid PDF: {target}")
         pages = []
         text_parts = []
-        remaining = max(0, min(int(max_chars), 100000))
+        full_response = getattr(config, "personal_full_access", False)
+        remaining = None if full_response else max(0, min(int(max_chars), 100000))
         for index, page in enumerate(doc):
             text = page.get_text("text")
             pages.append({"page": index + 1, "width": page.rect.width, "height": page.rect.height, "text_chars": len(text)})
-            if remaining:
+            if full_response:
+                text_parts.append(f"--- Page {index + 1} ---\n{text}")
+            elif remaining:
                 chunk = text[:remaining]
                 text_parts.append(f"--- Page {index + 1} ---\n{chunk}")
                 remaining -= len(chunk)
         raw_text = "\n".join(text_parts)
-        visible, truncated = truncate_text(raw_text, max_chars)
+        visible, truncated = response_truncate(config, raw_text, max_chars)
+        toc = doc.get_toc()
         return {
             "path": str(target), "page_count": doc.page_count,
-            "metadata": doc.metadata, "toc": doc.get_toc()[:200],
+            "metadata": doc.metadata, "toc": toc if full_response else toc[:200],
             "pages": pages, "text": visible, "truncated": truncated,
         }
 

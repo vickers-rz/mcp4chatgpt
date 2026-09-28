@@ -13,6 +13,10 @@ MCP_MCPC_TESTS=1 PYTHONPATH=src .venv/bin/python -m pytest -q tests/test_mcpc_ac
 
 测试只启动随机端口 loopback 服务，computer off，允许文件根和数据目录均在 pytest 临时目录。配置含临时 bearer 的 mcpc JSON 文件权限为 0600；mcpc home 单独设为 0700。通过 `finally` 关闭 session 和测试服务。正常 pytest 不下载 Node 依赖或联网。
 
+2026-09-27 更新：每轮使用随机服务密钥，凭据文件创建时即设为 0600；清理从服务启动前注册，覆盖初始化、连接后、重连后和 CLI 超时。mcpc 0.7.0 在可用时会把静态请求头写入 OS Keychain，`MCPC_HOME_DIR` 并不隔离这部分状态。测试使用唯一 session 名，清理只删除并核验本轮 session 的 header 凭据，不读取或覆盖用户已有条目。还检查本轮 bridge 进程退出，并删除临时配置文件。
+
+工具表与 registry 完整比较，单工具定义和 schema resource 也逐项核对。固定客户端会移除非标准的顶层 `securitySchemes`，比较仅排除这一字段，仍核对 `_meta` 中的镜像及所有标准 schema 字段。新增 4 个清理故障测试；默认 pytest 不运行这 6 个 mcpc 测试。
+
 自动化验证连接发现、会话调用、工具表、schema、server_info、schema resource、无效 bearer 和 session 清理。认证使用测试代码签发的临时 bearer，因此此项只验 MCP bearer transport，不代表 mcpc OAuth browser login 验收通过。
 
 ## OAuth 人工步骤

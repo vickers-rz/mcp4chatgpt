@@ -1,0 +1,409 @@
+{
+  "kind": "fixed_workload_data_path_v2",
+  "model_invoked": false,
+  "metric_contract": {
+    "call_count": "target MCP calls only; discovery calls are reported separately",
+    "successful_calls": "calls with isError != true and dict structuredContent",
+    "failed_calls": "target calls that raise or violate the MCP result contract",
+    "mcp_result_bytes": "serialized complete MCP tool results returned by the registry",
+    "projected_model_visible_bytes": "projection only; not client telemetry",
+    "discovery_cost": "tool definition bytes plus progressive discovery result bytes/calls",
+    "stage_seconds": "setup/discovery/execution/projection/total wall time",
+    "model_round_trips": null,
+    "model_tokens": null
+  },
+  "notes": [
+    "No executor, model, network, or public batch tool is used.",
+    "Model-visible bytes are projections, not client telemetry.",
+    "Dedicated batch and fixed orchestration share the same trusted reducer; equality does not establish Code Mode benefit.",
+    "Protocol acceptance and real-model E2E evaluation are separate evidence layers."
+  ],
+  "contract_scenarios": [
+    {
+      "name": "partial_pdf_failure",
+      "detected": true,
+      "summary": {
+        "requested": 2,
+        "completed": 1,
+        "abnormal": [],
+        "errors": [
+          {
+            "file": "missing.pdf",
+            "error": "FileNotFoundError"
+          }
+        ],
+        "complete": false
+      }
+    },
+    {
+      "name": "is_error",
+      "detected": true,
+      "error": "downstream_is_error"
+    },
+    {
+      "name": "missing_structured",
+      "detected": true,
+      "error": "missing_structured_result"
+    },
+    {
+      "name": "pagination_cycle",
+      "detected": true,
+      "error": "pagination_cycle"
+    },
+    {
+      "name": "target_version_change",
+      "detected": true,
+      "error": "capability_revision_changed"
+    }
+  ],
+  "results": [
+    {
+      "workload": "pdf",
+      "mode": "direct",
+      "call_count": 30,
+      "successful_calls": 30,
+      "failed_calls": 0,
+      "mcp_result_bytes": 40650,
+      "projected_model_visible_bytes": 40650,
+      "discovery_cost": {
+        "definition_bytes": 50273,
+        "result_bytes": 0,
+        "calls": 0
+      },
+      "stage_seconds": {
+        "setup": 0.014965541000037774,
+        "discovery": 0.0012570830003824085,
+        "execution": 0.037452334000136034,
+        "projection": 2.9100010578986257e-07,
+        "total": 0.05367691699984789
+      },
+      "model_round_trips": null,
+      "model_input_tokens": null,
+      "model_output_tokens": null,
+      "summary": {
+        "requested": 30,
+        "completed": 30,
+        "abnormal": [
+          "sample-00.pdf",
+          "sample-10.pdf",
+          "sample-20.pdf"
+        ],
+        "errors": [],
+        "complete": true
+      }
+    },
+    {
+      "workload": "pdf",
+      "mode": "compact",
+      "call_count": 30,
+      "successful_calls": 30,
+      "failed_calls": 0,
+      "mcp_result_bytes": 40650,
+      "projected_model_visible_bytes": 40650,
+      "discovery_cost": {
+        "definition_bytes": 2405,
+        "result_bytes": 4251,
+        "calls": 2
+      },
+      "stage_seconds": {
+        "setup": 0.013467750000017986,
+        "discovery": 0.002057874999991327,
+        "execution": 0.05343137499994555,
+        "projection": 4.5900014811195433e-07,
+        "total": 0.06895908400019835
+      },
+      "model_round_trips": null,
+      "model_input_tokens": null,
+      "model_output_tokens": null,
+      "summary": {
+        "requested": 30,
+        "completed": 30,
+        "abnormal": [
+          "sample-00.pdf",
+          "sample-10.pdf",
+          "sample-20.pdf"
+        ],
+        "errors": [],
+        "complete": true
+      }
+    },
+    {
+      "workload": "pdf",
+      "mode": "dedicated_batch",
+      "call_count": 30,
+      "successful_calls": 30,
+      "failed_calls": 0,
+      "mcp_result_bytes": 40650,
+      "projected_model_visible_bytes": 327,
+      "discovery_cost": {
+        "definition_bytes": null,
+        "result_bytes": 0,
+        "calls": 0
+      },
+      "stage_seconds": {
+        "setup": 0.01516158300000825,
+        "discovery": 2.909996510425117e-07,
+        "execution": 0.03700520800020968,
+        "projection": 8.958000307757175e-06,
+        "total": 0.05217733399967983
+      },
+      "model_round_trips": null,
+      "model_input_tokens": null,
+      "model_output_tokens": null,
+      "summary": {
+        "requested": 30,
+        "completed": 30,
+        "abnormal": [
+          "sample-00.pdf",
+          "sample-10.pdf",
+          "sample-20.pdf"
+        ],
+        "errors": [],
+        "complete": true
+      }
+    },
+    {
+      "workload": "pdf",
+      "mode": "fixed_orchestration",
+      "call_count": 30,
+      "successful_calls": 30,
+      "failed_calls": 0,
+      "mcp_result_bytes": 40650,
+      "projected_model_visible_bytes": 327,
+      "discovery_cost": {
+        "definition_bytes": null,
+        "result_bytes": 0,
+        "calls": 0
+      },
+      "stage_seconds": {
+        "setup": 0.01550258399993254,
+        "discovery": 2.9100010578986257e-07,
+        "execution": 0.03813270799992097,
+        "projection": 8.9169998318539e-06,
+        "total": 0.053645625000172004
+      },
+      "model_round_trips": null,
+      "model_input_tokens": null,
+      "model_output_tokens": null,
+      "summary": {
+        "requested": 30,
+        "completed": 30,
+        "abnormal": [
+          "sample-00.pdf",
+          "sample-10.pdf",
+          "sample-20.pdf"
+        ],
+        "errors": [],
+        "complete": true
+      }
+    },
+    {
+      "workload": "pages",
+      "mode": "direct",
+      "call_count": 10,
+      "successful_calls": 10,
+      "failed_calls": 0,
+      "mcp_result_bytes": 233913,
+      "projected_model_visible_bytes": 233913,
+      "discovery_cost": {
+        "definition_bytes": 50273,
+        "result_bytes": 0,
+        "calls": 0
+      },
+      "stage_seconds": {
+        "setup": 0.015485791000173776,
+        "discovery": 0.001332792000084737,
+        "execution": 0.007367334000264236,
+        "projection": 3.3399965104763396e-07,
+        "total": 0.02418858300006832
+      },
+      "model_round_trips": null,
+      "model_input_tokens": null,
+      "model_output_tokens": null,
+      "summary": {
+        "count": 1000,
+        "score_total": 7979,
+        "top5": [
+          {
+            "id": 16,
+            "score": 16
+          },
+          {
+            "id": 33,
+            "score": 16
+          },
+          {
+            "id": 50,
+            "score": 16
+          },
+          {
+            "id": 67,
+            "score": 16
+          },
+          {
+            "id": 84,
+            "score": 16
+          }
+        ],
+        "pages_completed": 10,
+        "complete": true
+      }
+    },
+    {
+      "workload": "pages",
+      "mode": "compact",
+      "call_count": 10,
+      "successful_calls": 10,
+      "failed_calls": 0,
+      "mcp_result_bytes": 233913,
+      "projected_model_visible_bytes": 233913,
+      "discovery_cost": {
+        "definition_bytes": 2405,
+        "result_bytes": 3674,
+        "calls": 2
+      },
+      "stage_seconds": {
+        "setup": 0.014225541999621782,
+        "discovery": 0.0021477909999703115,
+        "execution": 0.013080125000215048,
+        "projection": 3.7499967220355757e-07,
+        "total": 0.029456124999796884
+      },
+      "model_round_trips": null,
+      "model_input_tokens": null,
+      "model_output_tokens": null,
+      "summary": {
+        "count": 1000,
+        "score_total": 7979,
+        "top5": [
+          {
+            "id": 16,
+            "score": 16
+          },
+          {
+            "id": 33,
+            "score": 16
+          },
+          {
+            "id": 50,
+            "score": 16
+          },
+          {
+            "id": 67,
+            "score": 16
+          },
+          {
+            "id": 84,
+            "score": 16
+          }
+        ],
+        "pages_completed": 10,
+        "complete": true
+      }
+    },
+    {
+      "workload": "pages",
+      "mode": "dedicated_batch",
+      "call_count": 10,
+      "successful_calls": 10,
+      "failed_calls": 0,
+      "mcp_result_bytes": 233913,
+      "projected_model_visible_bytes": 486,
+      "discovery_cost": {
+        "definition_bytes": null,
+        "result_bytes": 0,
+        "calls": 0
+      },
+      "stage_seconds": {
+        "setup": 0.01499412500015751,
+        "discovery": 2.5000008463393897e-07,
+        "execution": 0.007614749999902415,
+        "projection": 1.2167000022600405e-05,
+        "total": 0.02262316699989242
+      },
+      "model_round_trips": null,
+      "model_input_tokens": null,
+      "model_output_tokens": null,
+      "summary": {
+        "count": 1000,
+        "score_total": 7979,
+        "top5": [
+          {
+            "id": 16,
+            "score": 16
+          },
+          {
+            "id": 33,
+            "score": 16
+          },
+          {
+            "id": 50,
+            "score": 16
+          },
+          {
+            "id": 67,
+            "score": 16
+          },
+          {
+            "id": 84,
+            "score": 16
+          }
+        ],
+        "pages_completed": 10,
+        "complete": true
+      }
+    },
+    {
+      "workload": "pages",
+      "mode": "fixed_orchestration",
+      "call_count": 10,
+      "successful_calls": 10,
+      "failed_calls": 0,
+      "mcp_result_bytes": 233913,
+      "projected_model_visible_bytes": 486,
+      "discovery_cost": {
+        "definition_bytes": null,
+        "result_bytes": 0,
+        "calls": 0
+      },
+      "stage_seconds": {
+        "setup": 0.014723082999807957,
+        "discovery": 2.5000008463393897e-07,
+        "execution": 0.0067795420000038575,
+        "projection": 1.1916999937966466e-05,
+        "total": 0.021515957999781676
+      },
+      "model_round_trips": null,
+      "model_input_tokens": null,
+      "model_output_tokens": null,
+      "summary": {
+        "count": 1000,
+        "score_total": 7979,
+        "top5": [
+          {
+            "id": 16,
+            "score": 16
+          },
+          {
+            "id": 33,
+            "score": 16
+          },
+          {
+            "id": 50,
+            "score": 16
+          },
+          {
+            "id": 67,
+            "score": 16
+          },
+          {
+            "id": 84,
+            "score": 16
+          }
+        ],
+        "pages_completed": 10,
+        "complete": true
+      }
+    }
+  ]
+}

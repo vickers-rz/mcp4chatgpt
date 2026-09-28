@@ -18,8 +18,9 @@ MCP_EXTERNAL_TUNNEL="${MCP_EXTERNAL_TUNNEL:-0}"
 MCP_COMPUTER_MODE="${MCP_COMPUTER_MODE:-off}"
 MCP_COMPUTER_ALLOWED_APPS="${MCP_COMPUTER_ALLOWED_APPS:-}"
 MCP_COMPUTER_BACKEND="${MCP_COMPUTER_BACKEND:-auto}"
+MCP_PERSONAL_FULL_ACCESS="${MCP_PERSONAL_FULL_ACCESS:-0}"
 export MCP_BIND_HOST MCP_BIND_PORT MCP_HEALTH_HOST MCP_PUBLIC_BASE_URL MCP_EXTERNAL_TUNNEL
-export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND
+export MCP_COMPUTER_MODE MCP_COMPUTER_ALLOWED_APPS MCP_COMPUTER_BACKEND MCP_PERSONAL_FULL_ACCESS
 
 health_host() {
   if [ -n "$MCP_HEALTH_HOST" ]; then
@@ -47,7 +48,12 @@ if command -v tmux >/dev/null 2>&1 && [ "${MCP_USE_LAUNCHD:-0}" != "1" ]; then
     tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
   fi
 
-  tmux new-session -d \
+  # Explicit profile settings must reach new panes even in an existing tmux server.
+  set --
+  if [ -n "${MCP_TOOL_EXPOSURE:-}" ]; then
+    set -- -e "MCP_TOOL_EXPOSURE=$MCP_TOOL_EXPOSURE"
+  fi
+  tmux new-session -d "$@" \
     -e "MCP_BIND_HOST=$MCP_BIND_HOST" \
     -e "MCP_BIND_PORT=$MCP_BIND_PORT" \
     -e "MCP_HEALTH_HOST=$MCP_HEALTH_HOST" \
@@ -56,6 +62,7 @@ if command -v tmux >/dev/null 2>&1 && [ "${MCP_USE_LAUNCHD:-0}" != "1" ]; then
     -e "MCP_COMPUTER_MODE=$MCP_COMPUTER_MODE" \
     -e "MCP_COMPUTER_ALLOWED_APPS=$MCP_COMPUTER_ALLOWED_APPS" \
     -e "MCP_COMPUTER_BACKEND=$MCP_COMPUTER_BACKEND" \
+    -e "MCP_PERSONAL_FULL_ACCESS=$MCP_PERSONAL_FULL_ACCESS" \
     -s "$TMUX_SESSION" -c "$ROOT" "$ROOT/scripts/dev.sh > '$OUT_LOG' 2> '$ERR_LOG'"
   ok=0
   # Downstream stdio servers can take longer than five seconds to initialize.

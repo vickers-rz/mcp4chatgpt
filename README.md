@@ -85,6 +85,22 @@ install anything into Login Items.
 
 Useful controller commands:
 
+For the existing Lucky Cloudflare Tunnel on N100, restart the Mac service with:
+
+```bash
+sh scripts/start_public_n100.sh
+```
+
+This uses the public OAuth origin `https://mcp.runzhe.uk`, listens on all IPv4
+network interfaces (`0.0.0.0`), and leaves the tunnel managed by N100. This
+restores the network settings used before commit `000b7f3` (2026-09-23).
+You can also run `./MCP4ChatGPT.command restart-public` directly.
+The public profile defaults to `compact`: `server_info`, `capability_search`,
+`capability_get`, and `capability_call`. Other capabilities are discovered on demand.
+For a full-list comparison or rollback, run
+`MCP_PUBLIC_TOOL_EXPOSURE=full ./MCP4ChatGPT.command restart-public`.
+Plain `start` / `restart` use local defaults and cannot serve the N100 tunnel.
+
 ```bash
 ./MCP4ChatGPT.command status
 ./MCP4ChatGPT.command check

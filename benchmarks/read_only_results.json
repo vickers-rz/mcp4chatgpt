@@ -1,0 +1,241 @@
+{
+  "kind": "fixed_workload_data_path",
+  "model_invoked": false,
+  "byte_boundary": "serialized registry MCP response, including text/structured duplication",
+  "notes": [
+    "No executor, model, network, or public batch tool is used.",
+    "Model-visible bytes are projections, not client telemetry.",
+    "Batch and orchestration use the same trusted reducer; equal results do not establish Code Mode benefit.",
+    "Elapsed time excludes discovery, model inference, and sandbox startup; no cold/warm comparison."
+  ],
+  "results": [
+    {
+      "workload": "pdf",
+      "mode": "direct",
+      "backend_calls": 30,
+      "backend_result_bytes": 40650,
+      "projected_model_visible_result_bytes": 40650,
+      "definition_bytes": 50082,
+      "discovery_result_bytes": 0,
+      "elapsed_seconds": 0.047828583999944385,
+      "model_round_trips": null,
+      "summary": {
+        "checked": 30,
+        "abnormal": [
+          "sample-00.pdf",
+          "sample-10.pdf",
+          "sample-20.pdf"
+        ],
+        "errors": []
+      }
+    },
+    {
+      "workload": "pdf",
+      "mode": "compact",
+      "backend_calls": 30,
+      "backend_result_bytes": 40650,
+      "projected_model_visible_result_bytes": 40650,
+      "definition_bytes": 2152,
+      "discovery_result_bytes": 3697,
+      "elapsed_seconds": 0.05863191699995696,
+      "model_round_trips": null,
+      "summary": {
+        "checked": 30,
+        "abnormal": [
+          "sample-00.pdf",
+          "sample-10.pdf",
+          "sample-20.pdf"
+        ],
+        "errors": []
+      }
+    },
+    {
+      "workload": "pdf",
+      "mode": "dedicated_batch",
+      "backend_calls": 30,
+      "backend_result_bytes": 40650,
+      "projected_model_visible_result_bytes": 253,
+      "definition_bytes": null,
+      "discovery_result_bytes": 0,
+      "elapsed_seconds": 0.03650795800012929,
+      "model_round_trips": null,
+      "summary": {
+        "checked": 30,
+        "abnormal": [
+          "sample-00.pdf",
+          "sample-10.pdf",
+          "sample-20.pdf"
+        ],
+        "errors": []
+      }
+    },
+    {
+      "workload": "pdf",
+      "mode": "fixed_orchestration",
+      "backend_calls": 30,
+      "backend_result_bytes": 40650,
+      "projected_model_visible_result_bytes": 253,
+      "definition_bytes": null,
+      "discovery_result_bytes": 0,
+      "elapsed_seconds": 0.03678058299988152,
+      "model_round_trips": null,
+      "summary": {
+        "checked": 30,
+        "abnormal": [
+          "sample-00.pdf",
+          "sample-10.pdf",
+          "sample-20.pdf"
+        ],
+        "errors": []
+      }
+    },
+    {
+      "workload": "pages",
+      "mode": "direct",
+      "backend_calls": 10,
+      "backend_result_bytes": 233913,
+      "projected_model_visible_result_bytes": 233913,
+      "definition_bytes": 50082,
+      "discovery_result_bytes": 0,
+      "elapsed_seconds": 0.0069854580001447175,
+      "model_round_trips": null,
+      "summary": {
+        "count": 1000,
+        "score_total": 7979,
+        "top5": [
+          {
+            "id": 16,
+            "score": 16
+          },
+          {
+            "id": 33,
+            "score": 16
+          },
+          {
+            "id": 50,
+            "score": 16
+          },
+          {
+            "id": 67,
+            "score": 16
+          },
+          {
+            "id": 84,
+            "score": 16
+          }
+        ]
+      }
+    },
+    {
+      "workload": "pages",
+      "mode": "compact",
+      "backend_calls": 10,
+      "backend_result_bytes": 233913,
+      "projected_model_visible_result_bytes": 233913,
+      "definition_bytes": 2152,
+      "discovery_result_bytes": 3304,
+      "elapsed_seconds": 0.013217417000078058,
+      "model_round_trips": null,
+      "summary": {
+        "count": 1000,
+        "score_total": 7979,
+        "top5": [
+          {
+            "id": 16,
+            "score": 16
+          },
+          {
+            "id": 33,
+            "score": 16
+          },
+          {
+            "id": 50,
+            "score": 16
+          },
+          {
+            "id": 67,
+            "score": 16
+          },
+          {
+            "id": 84,
+            "score": 16
+          }
+        ]
+      }
+    },
+    {
+      "workload": "pages",
+      "mode": "dedicated_batch",
+      "backend_calls": 10,
+      "backend_result_bytes": 233913,
+      "projected_model_visible_result_bytes": 404,
+      "definition_bytes": null,
+      "discovery_result_bytes": 0,
+      "elapsed_seconds": 0.006868292000035581,
+      "model_round_trips": null,
+      "summary": {
+        "count": 1000,
+        "score_total": 7979,
+        "top5": [
+          {
+            "id": 16,
+            "score": 16
+          },
+          {
+            "id": 33,
+            "score": 16
+          },
+          {
+            "id": 50,
+            "score": 16
+          },
+          {
+            "id": 67,
+            "score": 16
+          },
+          {
+            "id": 84,
+            "score": 16
+          }
+        ]
+      }
+    },
+    {
+      "workload": "pages",
+      "mode": "fixed_orchestration",
+      "backend_calls": 10,
+      "backend_result_bytes": 233913,
+      "projected_model_visible_result_bytes": 404,
+      "definition_bytes": null,
+      "discovery_result_bytes": 0,
+      "elapsed_seconds": 0.006895041999996465,
+      "model_round_trips": null,
+      "summary": {
+        "count": 1000,
+        "score_total": 7979,
+        "top5": [
+          {
+            "id": 16,
+            "score": 16
+          },
+          {
+            "id": 33,
+            "score": 16
+          },
+          {
+            "id": 50,
+            "score": 16
+          },
+          {
+            "id": 67,
+            "score": 16
+          },
+          {
+            "id": 84,
+            "score": 16
+          }
+        ]
+      }
+    }
+  ]
+}

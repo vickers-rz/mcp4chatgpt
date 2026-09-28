@@ -116,6 +116,34 @@ class CoreTests(unittest.TestCase):
         self.assertEqual(validate_command("sudo /sbin/shutdown -r now"), "sudo /sbin/shutdown -r now")
         self.assertEqual(validate_command("sudo reboot"), "sudo reboot")
         self.assertEqual(validate_command("printf hello"), "printf hello")
+        self.assertEqual(validate_command("rm -rf victim", personal_full_access=True), "rm -rf victim")
+
+    def test_personal_full_access_shell_and_response_plane(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = replace(make_config(Path(d)), personal_full_access=True, max_output_chars=20)
+            root = config.allowed_roots[0]
+            victim = root / "victim"
+            victim.mkdir()
+            (victim / "x.txt").write_text("x", encoding="utf-8")
+            removed = local_ops.run_command(config, "rm -rf victim", cwd=str(root))
+            self.assertEqual(removed["exit_code"], 0)
+            self.assertFalse(victim.exists())
+
+            raw = "Authorization: Bearer abc123-personal-full-access-" + ("x" * 80)
+            result = local_ops.run_command(config, "printf %s " + shlex.quote(raw), cwd=str(root))
+            self.assertEqual(result["stdout"], raw)
+            self.assertFalse(result["truncated"])
+
+            note = root / "raw.txt"
+            note.write_text(raw, encoding="utf-8")
+            read = local_ops.read_text(config, str(note), max_chars=10)
+            self.assertEqual(read["text"], raw)
+            self.assertFalse(read["truncated"])
+            self.assertTrue(read["full_replace_eligible"])
+
+            entry = json.loads((config.audit_log.parent / "commands.jsonl").read_text(encoding="utf-8").splitlines()[-1])
+            self.assertNotIn("abc123-personal-full-access", entry["stdout"])
+            self.assertTrue(entry["truncated"])
 
     def test_local_file_and_command(self) -> None:
         with tempfile.TemporaryDirectory() as d:

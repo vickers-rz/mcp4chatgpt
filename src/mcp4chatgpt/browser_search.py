@@ -11,7 +11,7 @@ from . import ext_bridge, knowledge_ops, web_archive
 from .config import Config
 from .ext_ops import _require_connected
 from .retrieval import lexical_terms
-from .safety import redact, validate_research_url
+from .safety import response_redact, validate_research_url
 
 
 def _tab_slot_count() -> int:
@@ -56,9 +56,9 @@ def read(config: Config, url: str, max_chars: int = 30000, *, include_html: bool
     }, timeout=45 if include_html or max_chars > 60000 else 30)
     final_url = str(result.get("url") or url)
     validate_research_url(final_url)
-    result["text"] = redact(str(result.get("text", "")))
+    result["text"] = response_redact(config, str(result.get("text", "")))
     if include_html and isinstance(result.get("html"), str):
-        result["html"] = redact(result["html"])
+        result["html"] = response_redact(config, result["html"])
     return result
 
 

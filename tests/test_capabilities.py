@@ -16,13 +16,20 @@ from test_core import make_config
 
 
 class FakeDownstream:
-    def __init__(self):
+    def __init__(self, tools=None):
         self.calls = []
+        self.tools = tools if tools is not None else [
+            DownstreamToolInfo(
+                "lookup",
+                "docs__lookup",
+                "Search internal documentation records.",
+                {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+                "docs",
+            )
+        ]
 
     def get_tools(self):
-        return [DownstreamToolInfo("lookup", "docs__lookup", "Search internal documentation records.",
-                                   {"type": "object", "properties": {"query": {"type": "string"}},
-                                    "required": ["query"]}, "docs")]
+        return list(self.tools)
 
     def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
@@ -43,12 +50,17 @@ def test_full_default_and_compact_exposure_contract(tmp_path):
     names = [x["name"] for x in full.list_tools(auth_required=False)["tools"]]
     assert names[:2] == ["server_info", "pdf_inspect"]
     assert names[-3:] == ["capability_search", "capability_get", "capability_call"]
+    assert "capability_list" not in names
     assert "local_read_text" in names
     compact = ToolRegistry(replace(config, tool_exposure="compact"), AuditLogger(config.audit_log))
     names = [x["name"] for x in compact.list_tools(auth_required=False)["tools"]]
-    expected = [n for n in compact._catalog_names if n == "server_info" or n.startswith("computer_")]
-    assert names == expected + ["capability_search", "capability_get", "capability_call"]
+    assert names == ["server_info", "capability_search", "capability_get", "capability_call"]
+    assert any(n.startswith("computer_") for n in compact._catalog_names)
+    assert not any(n.startswith("computer_") for n in names)
+    assert "capability_list" not in names
     assert "local_read_text" not in names
+    listed = compact.call_tool("capability_list", {"category": "pdf", "limit": 1})["structuredContent"]
+    assert listed["items"] and listed["items"][0]["category"] == "pdf"
     full_size = len(json.dumps(full.list_tools(auth_required=False), sort_keys=True, separators=(",", ":")).encode())
     compact_size = len(json.dumps(compact.list_tools(auth_required=False), sort_keys=True, separators=(",", ":")).encode())
     assert compact_size <= full_size * .3
@@ -64,7 +76,46 @@ def test_search_casefold_source_ranking_and_truncation(registry):
     ds = ToolRegistry(registry.config, AuditLogger(registry.config.audit_log), downstream_manager=manager)
     got = ds.call_tool("capability_search", {"query": "internal documentation"})["structuredContent"]
     assert got["matches"][0]["source"] == "downstream:docs"
+    got = ds.call_tool("capability_search", {"query": "documentation query"})["structuredContent"]
+    assert not got["matches"]
+    got = ds.call_tool("capability_search", {"query": "documentation query extra-term"})["structuredContent"]
+    assert not got["matches"]
     assert ds.call_tool("capability_search", {"query": "pdf", "limit": 1})["structuredContent"]["truncated"]
+
+
+def test_catalog_refresh_tracks_runtime_downstream_changes(tmp_path):
+    manager = FakeDownstream()
+    config = replace(make_config(tmp_path), computer_mode="off", tool_exposure="full")
+    registry = ToolRegistry(config, AuditLogger(config.audit_log), downstream_manager=manager)
+    original_version = registry.catalog_version
+    assert "docs__lookup" in registry._catalog_name_set
+
+    manager.tools = [
+        DownstreamToolInfo(
+            "fetch",
+            "docs__fetch",
+            "Fetch updated documentation records.",
+            {
+                "type": "object",
+                "properties": {"document_id": {"type": "string"}},
+                "required": ["document_id"],
+            },
+            "docs",
+        )
+    ]
+
+    got = registry.call_tool(
+        "capability_search",
+        {"query": "updated documentation"},
+    )["structuredContent"]
+    assert got["matches"][0]["name"] == "docs__fetch"
+    assert registry.catalog_version != original_version
+    assert "docs__fetch" in registry._catalog_name_set
+    assert "docs__lookup" not in registry._catalog_name_set
+    listed = {tool["name"] for tool in registry.list_tools(auth_required=False)["tools"]}
+    assert "docs__fetch" in listed and "docs__lookup" not in listed
+    with pytest.raises(ValueError, match="capability_not_found"):
+        registry.call_tool("capability_get", {"name": "docs__lookup"})
 
 
 def test_get_excludes_aliases_and_recursive_discovery_tools(registry):
@@ -111,9 +162,9 @@ def test_catalog_hash_tracks_schema_and_ignores_object_key_order(registry):
     original = registry.catalog_version
     tool = registry.tools["server_info"]
     registry.tools["server_info"] = replace(tool, input_schema={"type": "object", "properties": {"b": {}, "a": {}}})
-    changed = registry._definition_hash(registry._catalog_names, auth_required=False)
+    changed = registry._catalog_hash()
     registry.tools["server_info"] = replace(tool, input_schema={"type": "object", "properties": {"a": {}, "b": {}}})
-    same = registry._definition_hash(registry._catalog_names, auth_required=False)
+    same = registry._catalog_hash()
     assert original != changed and changed == same
 
 
@@ -179,3 +230,104 @@ def test_capability_call_invokes_once_and_records_target_context(tmp_path):
         "tool": "docs__lookup", "client_id": "client-123", "channel": "docs",
         "invoked_via": "capability_call",
     }
+
+
+def test_capability_get_metadata_examples_and_output_schema(tmp_path):
+    config = replace(make_config(tmp_path), computer_mode="off")
+    downstream = FakeDownstream([DownstreamToolInfo(
+        original_name="lookup",
+        namespaced_name="docs__lookup",
+        description="Look up controlled records.",
+        input_schema={"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]},
+        downstream_id="docs",
+        output_schema={"type": "object", "properties": {"found": {"type": "boolean"}}},
+    )])
+    registry = ToolRegistry(config, AuditLogger(config.audit_log), downstream_manager=downstream)
+
+    pdf = registry._capability_get({"name": "pdf_insert_text"})
+    assert pdf["category"] == "pdf"
+    assert pdf["availability"] == {"status": "unknown", "evidence": "not_checked"}
+    assert pdf["aliases"] == ["MCP4ChatGPT.pdf_insert_text"]
+    assert pdf["deprecated"] is False and pdf["replacement"] is None
+    assert pdf["examples"]
+    for example in pdf["examples"]:
+        registry._validate_capability_arguments(registry.tools["pdf_insert_text"], example)
+
+    got = registry._capability_get({"name": "docs__lookup"})
+    assert got["tool"]["outputSchema"] == {
+        "type": "object", "properties": {"found": {"type": "boolean"}}
+    }
+    assert got["availability"]["status"] == "unknown"
+
+
+def test_maintained_examples_cover_required_workflows_and_validate(registry):
+    required = {
+        "pdf_inspect", "pdf_redact_text", "pdf_insert_text",
+        "local_read_text", "local_write_file", "local_apply_patch",
+        "local_start_job", "local_job_status", "local_job_logs", "local_cancel_job",
+    }
+    for name in required:
+        got = registry._capability_get({"name": name})
+        assert got["examples"], name
+        for example in got["examples"]:
+            registry._validate_capability_arguments(registry.tools[name], example)
+
+    for name in ("capability_search", "capability_get", "capability_list", "capability_call"):
+        from mcp4chatgpt.capability_catalog import examples_for
+        examples = examples_for(name)
+        assert examples, name
+        for example in examples:
+            registry._validate_capability_arguments(registry.tools[name], example)
+
+
+def test_weighted_search_filters_and_bilingual_queries(tmp_path):
+    config = replace(make_config(tmp_path), computer_mode="off")
+    downstream = FakeDownstream([
+        DownstreamToolInfo(
+            "navigate", "devtools__navigate", "Navigate a controlled browser target.",
+            {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+            "chrome_devtools",
+        ),
+        DownstreamToolInfo(
+            "navigate", "headless__navigate", "Navigate a controlled browser target.",
+            {"type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]},
+            "chrome_headless",
+        ),
+    ])
+    registry = ToolRegistry(config, AuditLogger(config.audit_log), downstream_manager=downstream)
+
+    assert registry._capability_search({"query": "PDF 编辑", "category": "pdf"})["matches"][0]["name"] == "pdf_insert_text"
+    assert registry._capability_search({"query": "文件 写入", "source": "local"})["matches"][0]["name"] == "local_write_file"
+    assert registry._capability_search({"query": "后台任务 start", "category": "jobs"})["matches"][0]["name"] == "local_start_job"
+    assert registry._capability_search({
+        "query": "chrome devtools navigate", "backend": "chrome_devtools",
+    })["matches"][0]["name"] == "devtools__navigate"
+    assert registry._capability_search({
+        "query": "chrome headless navigate", "backend": "chrome_headless",
+    })["matches"][0]["name"] == "headless__navigate"
+
+
+def test_capability_list_pagination_filter_binding_and_catalog_invalidation(tmp_path):
+    manager = FakeDownstream()
+    config = replace(make_config(tmp_path), computer_mode="off")
+    registry = ToolRegistry(config, AuditLogger(config.audit_log), downstream_manager=manager)
+
+    first = registry._capability_list({"category": "pdf", "limit": 2})
+    assert len(first["items"]) == 2 and first["has_more"] is True
+    cursor = first["next_cursor"]
+    second = registry._capability_list({"cursor": cursor})
+    names = [item["name"] for item in first["items"] + second["items"]]
+    assert len(names) == len(set(names)) == 4
+    assert all(item["category"] == "pdf" for item in first["items"] + second["items"])
+
+    with pytest.raises(ValueError, match="capability_cursor_mismatch"):
+        registry._capability_list({"cursor": cursor, "category": "files"})
+
+    manager.tools = [DownstreamToolInfo(
+        "fetch", "docs__fetch", "Fetch a record.",
+        {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]},
+        "docs",
+    )]
+    registry.refresh_catalog()
+    with pytest.raises(ValueError, match="capability_catalog_changed"):
+        registry._capability_list({"cursor": cursor})

@@ -1,0 +1,14 @@
+{
+  "records": [
+    {
+      "id": "C",
+      "amount": 19,
+      "status": "ok"
+    },
+    {
+      "id": "D",
+      "amount": 4,
+      "status": "ok"
+    }
+  ]
+}

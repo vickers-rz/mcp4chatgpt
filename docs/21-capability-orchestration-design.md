@@ -89,7 +89,19 @@ Evaluate two categories independently:
   accounting, and macOS compatibility. Python `exec`, Node `vm`, ordinary
   shell, and mcpc credential proxy do not provide this isolation.
 
-No runtime should be chosen until both categories have a threat model, a
-working bridge prototype with no credential exposure, limit-enforcement tests,
-and operational cost estimates. Keep GUI execution in the existing local
+Compare threat models, feasibility, and operational costs for both categories
+first. Build a working bridge and limit-enforcement prototype only for the
+selected candidate; require these checks before production acceptance. Keep GUI execution in the existing local
 computer subsystem; never tunnel it through arbitrary generated code.
+
+
+## Implementation clarification (2026-09-27)
+
+See document 25 for the current staged contract. Fixed aggregation benchmarks
+compare direct, compact, dedicated batch, and fixed orchestration. They do not
+measure model round trips or establish a benefit from arbitrary generated code.
+Model-based end-to-end evaluation must justify that additional investment.
+The current CallContext supplies host-created admission constraints only; it
+now supports per-capability identity constraints and stdio process incarnation
+checks. It is not a production bridge, sandbox, hard timeout, or browser/session
+resource lease.

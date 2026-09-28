@@ -66,11 +66,21 @@ def _html_response(handler: BaseHTTPRequestHandler, status: int, body: bytes) ->
     handler.wfile.write(body)
 
 
+def _protected_resource_metadata_url(config: Config) -> str:
+    """Derive the RFC 9728 metadata URL from the protected MCP resource URL."""
+    resource = urlparse(config.mcp_url)
+    path = f"/.well-known/oauth-protected-resource{resource.path or ''}"
+    return resource._replace(path=path, params="", fragment="").geturl()
+
+
 def _auth_required(handler: BaseHTTPRequestHandler, config: Config, message: str) -> None:
     body = json.dumps({"error": message}, ensure_ascii=False).encode("utf-8")
     handler.send_response(401)
     handler.send_header("Content-Type", "application/json; charset=utf-8")
-    handler.send_header("WWW-Authenticate", f'Bearer resource_metadata="{config.public_base_url}/.well-known/oauth-protected-resource"')
+    handler.send_header(
+        "WWW-Authenticate",
+        f'Bearer resource_metadata="{_protected_resource_metadata_url(config)}"',
+    )
     handler.send_header("Content-Length", str(len(body)))
     handler.end_headers()
     handler.wfile.write(body)
@@ -266,7 +276,12 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/.well-known/oauth-authorization-server":
             _json_response(self, 200, metadata(self.server.config))
             return
-        if parsed.path == "/.well-known/oauth-protected-resource":
+        protected_metadata_path = urlparse(
+            _protected_resource_metadata_url(self.server.config)
+        ).path
+        if parsed.path in {
+            "/.well-known/oauth-protected-resource", protected_metadata_path,
+        }:
             _json_response(self, 200, protected_resource_metadata(self.server.config))
             return
         if parsed.path == "/oauth/authorize":
@@ -498,11 +513,12 @@ class Handler(BaseHTTPRequestHandler):
                 "auth_mode": auth_mode,
                 "protocol_version": protocol_version,
             }
+            listed_snapshot = None
             if method == "tools/list":
-                audit_fields.update(
-                    tool_count=len(self.server.registry._all_listed_names),
-                    toolset_hash=self.server.registry.toolset_hash,
+                listed_snapshot, listing_metadata = self.server.registry.list_tools_snapshot(
+                    auth_required=descriptor_auth_required,
                 )
+                audit_fields.update(listing_metadata)
             self.server.registry.audit.log("mcp_request", **audit_fields)
             if modern_request and method == "server/discover":
                 result = {
@@ -524,7 +540,7 @@ class Handler(BaseHTTPRequestHandler):
                 _empty_response(self, 202, {"MCP-Protocol-Version": protocol_version})
                 return
             elif method == "tools/list":
-                result = self.server.registry.list_tools(auth_required=descriptor_auth_required)
+                result = listed_snapshot
             elif method == "resources/list":
                 result = self.server.registry.list_tool_resources()
             elif method == "resources/read":
@@ -535,7 +551,7 @@ class Handler(BaseHTTPRequestHandler):
             elif method == "prompts/list":
                 result = {"prompts": []}
             elif method == "tools/call":
-                result = self.server.registry.call_tool(params.get("name", ""), params.get("arguments") or {}, client_id)
+                result = self.server.registry.call_tool(params.get("name", ""), params.get("arguments", {}), client_id)
             else:
                 _mcp_json_response(
                     self,

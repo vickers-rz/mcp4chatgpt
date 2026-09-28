@@ -16,6 +16,7 @@ import re
 import socket
 from pathlib import Path
 from urllib.parse import urlsplit
+from typing import Any
 
 
 SECRET_PATTERNS = [
@@ -162,12 +163,32 @@ def truncate_text(text: str, max_chars: int) -> tuple[str, bool]:
     return text[: max_chars // 2] + "\n...[truncated]...\n" + text[-max_chars // 2 :], True
 
 
-def validate_command(command: str) -> str:
+def response_redact(config: Any, text: str) -> str:
+    """Apply project-level response redaction unless personal full access is enabled."""
+    return str(text) if getattr(config, "personal_full_access", False) else redact(str(text))
+
+
+def response_truncate(config: Any, text: str, max_chars: int) -> tuple[str, bool]:
+    """Apply project-level response truncation unless personal full access is enabled."""
+    value = str(text)
+    if getattr(config, "personal_full_access", False):
+        return value, False
+    return truncate_text(value, max_chars)
+
+
+def response_text(config: Any, text: str, max_chars: int) -> tuple[str, bool]:
+    """Project response-plane transform; audit logging keeps using redact/truncate directly."""
+    return response_truncate(config, response_redact(config, text), max_chars)
+
+
+def validate_command(command: str, *, personal_full_access: bool = False) -> str:
     command = command.strip()
     if not command:
         raise ValueError("Command cannot be empty.")
     if len(command) > 4000:
         raise ValueError("Command is too long.")
+    if personal_full_access:
+        return command
     if any(pattern.fullmatch(command) for pattern in SAFE_PRIVILEGED_COMMAND_PATTERNS):
         return command
     for pattern in DANGEROUS_COMMAND_PATTERNS:

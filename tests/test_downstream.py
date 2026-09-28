@@ -706,7 +706,7 @@ class TestDownstreamMCPManager:
 class TestToolRegistryDownstreamIntegration:
     """Test that downstream tools integrate with the existing ToolRegistry."""
 
-    def test_native_tools_not_lost_with_downstream(self, tmp_path):
+    def test_native_tools_not_lost_with_downstream(self, tmp_path, monkeypatch):
         """11. native tool regression — adding downstream doesn't lose native"""
         config_dir = _make_toml(tmp_path, {
             "fake": {
@@ -727,6 +727,7 @@ class TestToolRegistryDownstreamIntegration:
 
             os.environ.setdefault("MCP_AUTH_SECRET", "test-secret-for-downstream-test")
             os.environ.setdefault("MCP_ALLOWED_ROOTS", str(tmp_path))
+            monkeypatch.setenv("MCP_TOOL_EXPOSURE", "full")
             config = load_config()
             audit = AuditLogger(tmp_path / "audit.jsonl")
 

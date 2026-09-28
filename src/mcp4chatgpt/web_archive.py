@@ -19,7 +19,7 @@ from urllib.parse import unquote, urlsplit, urlunsplit
 from .config import Config
 from .knowledge_ops import _chunk_text
 from .retrieval import fts5_query, indexed_text, unique_terms
-from .safety import truncate_text
+from .safety import response_truncate
 
 _DB_INIT_LOCK = threading.RLock()
 
@@ -403,7 +403,7 @@ def search(config: Config, query: str, limit: int = 8) -> dict[str, Any]:
             backend = "sqlite_lexical_fallback"
         results = []
         for row in rows:
-            quote, truncated = truncate_text(str(row["text"]), 700)
+            quote, truncated = response_truncate(config, str(row["text"]), 700)
             results.append({"document_id": row["document_id"], "version_id": row["version_id"],
                             "chunk_id": row["chunk_id"], "title": row["title"], "url": row["final_url"],
                             "canonical_url": row["canonical_url"], "fetched_at": row["fetched_at"],
@@ -421,7 +421,7 @@ def fetch(config: Config, *, document_id: str | None = None, version_id: str | N
             row = db.execute("SELECT c.*,v.document_id,v.title,v.final_url,d.canonical_url FROM chunks c JOIN versions v ON v.version_id=c.version_id JOIN documents d ON d.document_id=v.document_id WHERE c.chunk_id=?", (chunk_id,)).fetchone()
             if not row:
                 raise ValueError(f"Unknown chunk_id: {chunk_id}")
-            text, truncated = truncate_text(str(row["text"]), max_chars)
+            text, truncated = response_truncate(config, str(row["text"]), max_chars)
             return {**dict(row), "text": text, "truncated": truncated}
         if not version_id and document_id:
             row = db.execute("SELECT current_version_id FROM documents WHERE document_id=?", (document_id,)).fetchone()
@@ -434,7 +434,7 @@ def fetch(config: Config, *, document_id: str | None = None, version_id: str | N
         if not row:
             raise ValueError(f"Unknown version_id: {version_id}")
         text = Path(row["text_path"]).read_text(encoding="utf-8", errors="replace")
-        bounded, truncated = truncate_text(text, max_chars)
+        bounded, truncated = response_truncate(config, text, max_chars)
         return {"document_id": row["document_id"], "version_id": row["version_id"], "title": row["title"],
                 "url": row["final_url"], "canonical_url": row["canonical_url"], "fetched_at": row["fetched_at"],
                 "published_at": row["published_at"], "extraction_method": row["extraction_method"],

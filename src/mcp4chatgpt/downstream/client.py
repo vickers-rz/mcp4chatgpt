@@ -9,12 +9,14 @@ reimplement the full MCP client protocol.
 from __future__ import annotations
 
 import asyncio
+from copy import deepcopy
 import json
 import logging
 import os
 import signal
 import threading
 import time
+import uuid
 from typing import Any
 
 log = logging.getLogger(__name__)
@@ -49,6 +51,7 @@ class StdioMCPClient:
         startup_timeout: float = 30.0,
         call_timeout: float = 60.0,
     ) -> None:
+        self._instance_id = uuid.uuid4().hex
         self._downstream_id = downstream_id
         self._command = command
         self._args = args
@@ -73,6 +76,10 @@ class StdioMCPClient:
         self._server_info: dict[str, Any] = {}
         self._server_capabilities: dict[str, Any] = {}
         self._tools: list[dict[str, Any]] = []
+        self._tools_lock = threading.Lock()
+        self._tools_generation = 0
+        self._catalog_refresh_task: asyncio.Task | None = None
+        self._catalog_error: str | None = None
         self._pid: int | None = None
         self._started_at: float | None = None
         self._closed = False
@@ -81,12 +88,28 @@ class StdioMCPClient:
     # ── Properties ──────────────────────────────────────────────────
 
     @property
+    def instance_id(self) -> str:
+        """Opaque transport incarnation, changed on every start attempt."""
+        return self._instance_id
+
+    @property
     def pid(self) -> int | None:
         return self._pid
 
     @property
     def tools(self) -> list[dict[str, Any]]:
-        return list(self._tools)
+        with self._tools_lock:
+            return deepcopy(self._tools)
+
+    def catalog_snapshot(self) -> tuple[str, list[dict[str, Any]]]:
+        """Read incarnation and definitions together, including during restart."""
+        with self._tools_lock:
+            return self._instance_id, deepcopy(self._tools)
+
+    @property
+    def catalog_error(self) -> str | None:
+        with self._tools_lock:
+            return self._catalog_error
 
     @property
     def started_at(self) -> float | None:
@@ -120,6 +143,10 @@ class StdioMCPClient:
         if self._thread is not None:
             raise StdioMCPClientError("Client already started")
 
+        with self._tools_lock:
+            self._instance_id = uuid.uuid4().hex
+            self._tools = []
+            self._catalog_error = None
         self._ready.clear()
         self._start_error = None
         self._transport_error = None
@@ -174,6 +201,7 @@ class StdioMCPClient:
     def call_tool(
         self, tool_name: str, arguments: dict[str, Any] | None = None,
         timeout: float | None = None,
+        *, expected_instance_id: str | None = None,
     ) -> dict[str, Any]:
         """Call a tool on the downstream MCP server. Thread-safe."""
         if not self.is_running:
@@ -182,7 +210,7 @@ class StdioMCPClient:
             )
         t = self._call_timeout if timeout is None else timeout
         fut = asyncio.run_coroutine_threadsafe(
-            self._async_call_tool(tool_name, arguments or {}, t),
+            self._async_call_tool(tool_name, arguments or {}, t, expected_instance_id),
             self._loop,
         )
         try:
@@ -344,22 +372,13 @@ class StdioMCPClient:
             self._server_info.get("name", "unknown"),
         )
 
-        # Discover tools
-        try:
-            tools_result = await asyncio.wait_for(
-                self._send_request("tools/list", {}),
-                timeout=self._startup_timeout,
-            )
-        except asyncio.TimeoutError:
-            raise StdioMCPClientError(
-                f"Downstream {self._downstream_id!r} tools/list timed out"
-            )
-
-        self._tools = tools_result.get("tools", [])
-        log.info(
-            "downstream %s: discovered %d tools",
-            self._downstream_id, len(self._tools),
-        )
+        # Publish only a complete, bounded list (including all pages).
+        generation = self._tools_generation
+        tools = await asyncio.wait_for(self._discover_tools(), timeout=self._startup_timeout)
+        with self._tools_lock:
+            self._tools = tools
+        if generation != self._tools_generation:
+            self._catalog_refresh_task = asyncio.create_task(self._refresh_tools())
 
         # Signal ready to the calling thread, then keep this loop alive for the
         # lifetime of the reader task.  Public tool calls are scheduled onto
@@ -367,6 +386,59 @@ class StdioMCPClient:
         self._ready.set()
         assert self._reader_task is not None
         await self._reader_task
+
+    async def _discover_tools(self) -> list[dict[str, Any]]:
+        tools: list[dict[str, Any]] = []
+        cursor = None
+        seen_cursors = set()
+        names = set()
+        for _ in range(64):
+            result = await self._send_request("tools/list", {} if cursor is None else {"cursor": cursor})
+            page = result.get("tools")
+            if not isinstance(page, list):
+                raise StdioMCPClientError("Invalid downstream tools/list")
+            for tool in page:
+                if (not isinstance(tool, dict) or not isinstance(tool.get("name"), str)
+                        or not tool["name"] or tool["name"] in names
+                        or not isinstance(tool.get("inputSchema"), dict)):
+                    raise StdioMCPClientError("Invalid or duplicate downstream tool definition")
+                if ("description" in tool and not isinstance(tool["description"], str)) or any(
+                    key in tool and not isinstance(tool[key], dict) for key in ("annotations", "outputSchema")
+                ):
+                    raise StdioMCPClientError("Invalid downstream tool metadata")
+                names.add(tool["name"])
+                tools.append(tool)
+            if len(tools) > 10000:
+                raise StdioMCPClientError("Downstream catalog exceeds tool limit")
+            cursor = result.get("nextCursor")
+            if cursor is None:
+                return tools
+            if not isinstance(cursor, str) or not cursor or cursor in seen_cursors:
+                raise StdioMCPClientError("Invalid downstream tools/list cursor")
+            seen_cursors.add(cursor)
+        raise StdioMCPClientError("Downstream catalog exceeds page limit")
+
+    async def _refresh_tools(self) -> None:
+        # Notifications are coalesced; the reader remains available to receive
+        # tools/list responses. Never retry tools/call as part of discovery.
+        while not self._closed:
+            generation = self._tools_generation
+            try:
+                tools = await asyncio.wait_for(self._discover_tools(), timeout=self._startup_timeout)
+                if generation == self._tools_generation:
+                    with self._tools_lock:
+                        self._tools = tools
+                        self._catalog_error = None
+            except Exception as exc:
+                catalog_error = str(exc)[:1000] or type(exc).__name__
+                with self._tools_lock:
+                    self._catalog_error = catalog_error
+                log.warning("downstream %s: catalog refresh failed: %s", self._downstream_id, catalog_error)
+                if generation != self._tools_generation:
+                    continue  # honor a newer notification received during the failed request
+                return  # retain last complete catalog; a later notification may retry
+            if generation == self._tools_generation:
+                return
 
     def _mark_transport_failed(self, message: str) -> None:
         """Mark an otherwise-live child unusable and begin group teardown."""
@@ -437,6 +509,12 @@ class StdioMCPClient:
     def _dispatch_message(self, msg: dict[str, Any]) -> None:
         """Route a JSON-RPC message to the appropriate pending future."""
         if "id" not in msg:
+            if msg.get("method") == "notifications/tools/list_changed":
+                self._tools_generation += 1
+                if self._ready.is_set() and not self._closed and (
+                    self._catalog_refresh_task is None or self._catalog_refresh_task.done()
+                ):
+                    self._catalog_refresh_task = asyncio.create_task(self._refresh_tools())
             if "method" in msg:
                 log.debug(
                     "downstream %s: server notification method=%s",
@@ -492,8 +570,11 @@ class StdioMCPClient:
 
     async def _send_request(
         self, method: str, params: dict[str, Any],
+        *, expected_instance_id: str | None = None,
     ) -> dict[str, Any]:
         """Send a JSON-RPC request and await the response."""
+        if expected_instance_id is not None and expected_instance_id != self.instance_id:
+            raise StdioMCPClientError("capability_backend_changed")
         assert self._process is not None
         assert self._process.stdin is not None
         assert self._loop is not None
@@ -513,21 +594,17 @@ class StdioMCPClient:
 
         payload = json.dumps(msg, ensure_ascii=False) + "\n"
         try:
-            self._process.stdin.write(payload.encode("utf-8"))
-            await self._process.stdin.drain()
-        except Exception as exc:
-            self._pending.pop(req_id, None)
-            raise StdioMCPClientError(
-                f"Failed to write to downstream stdin: {exc}"
-            ) from exc
-
-        try:
+            try:
+                self._process.stdin.write(payload.encode("utf-8"))
+                await self._process.stdin.drain()
+            except Exception as exc:
+                raise StdioMCPClientError(f"Failed to write to downstream stdin: {exc}") from exc
             return await fut
         finally:
-            # _dispatch_message normally removes completed requests. This also
-            # clears timed-out/cancelled requests so late responses are ignored
-            # instead of leaking pending futures.
+            # Cancellation can happen during drain, before the response wait.
             self._pending.pop(req_id, None)
+            if not fut.done():
+                fut.cancel()
 
     async def _send_server_error(
         self, request_id: str | int, code: int, message: str,
@@ -568,13 +645,14 @@ class StdioMCPClient:
 
     async def _async_call_tool(
         self, name: str, arguments: dict[str, Any], timeout: float,
+        expected_instance_id: str | None = None,
     ) -> dict[str, Any]:
         """Forward a tools/call request to the downstream server."""
         return await asyncio.wait_for(
             self._send_request("tools/call", {
                 "name": name,
                 "arguments": arguments,
-            }),
+            }, expected_instance_id=expected_instance_id),
             timeout=timeout,
         )
 
@@ -583,6 +661,14 @@ class StdioMCPClient:
     async def _async_stop(self) -> None:
         """Gracefully stop the downstream process."""
         self._closed = True
+        refresh_task = self._catalog_refresh_task
+        if refresh_task is not None and not refresh_task.done():
+            refresh_task.cancel()
+            try:
+                await refresh_task
+            except asyncio.CancelledError:
+                pass
+        self._catalog_refresh_task = None
 
         if self._process is None or self._process.returncode is not None:
             if self._reader_task is not None and not self._reader_task.done():
@@ -670,13 +756,11 @@ class StdioMCPClient:
                     process.kill()
                 except Exception:
                     pass
-        if (
-            self._loop is not None
-            and not self._loop.is_closed()
-            and self._reader_task is not None
-            and not self._reader_task.done()
-        ):
-            self._loop.call_soon_threadsafe(self._reader_task.cancel)
+        if self._loop is not None and not self._loop.is_closed():
+            if self._catalog_refresh_task is not None and not self._catalog_refresh_task.done():
+                self._loop.call_soon_threadsafe(self._catalog_refresh_task.cancel)
+            if self._reader_task is not None and not self._reader_task.done():
+                self._loop.call_soon_threadsafe(self._reader_task.cancel)
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=5)

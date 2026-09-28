@@ -182,7 +182,7 @@ def _he(s: str) -> str:
 # OAuth params that are allowed through to the hidden form fields.
 _AUTHORIZE_FORM_PARAMS = frozenset({
     "client_id", "redirect_uri", "response_type", "scope",
-    "state", "code_challenge", "code_challenge_method", "nonce",
+    "state", "code_challenge", "code_challenge_method", "nonce", "resource",
 })
 
 
@@ -217,6 +217,9 @@ def create_auth_redirect(config: Config, params: dict[str, str], admin_secret: s
     redirect_uri = params.get("redirect_uri", "")
     if not client_id or not redirect_uri:
         raise ValueError("client_id and redirect_uri are required.")
+    resource = params.get("resource", "")
+    if resource and resource != config.mcp_url:
+        raise ValueError("resource does not match this MCP server.")
     clients = _load_clients(config)
     client = clients.get(client_id)
     if not client:
@@ -233,6 +236,7 @@ def create_auth_redirect(config: Config, params: dict[str, str], admin_secret: s
             "redirect_uri": redirect_uri,
             "code_challenge": params.get("code_challenge"),
             "code_challenge_method": params.get("code_challenge_method", "plain"),
+            "resource": resource,
             "created_at": time.time(),
         }
     query = {"code": code}
@@ -255,6 +259,13 @@ def issue_token(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Authorization code has expired.")
         AUTH_CODES.pop(code, None)  # consume — single use
         _cleanup_expired_codes()    # opportunistic cleanup of other stale codes
+    resource = str(record.get("resource") or "")
+    requested_resource = str(payload.get("resource") or "")
+    if resource:
+        if not requested_resource or requested_resource != resource:
+            raise ValueError("resource must match the authorization request.")
+        if resource != config.mcp_url:
+            raise ValueError("resource does not match this MCP server.")
     verifier = payload.get("code_verifier")
     challenge = record.get("code_challenge")
     if challenge:
@@ -268,6 +279,8 @@ def issue_token(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("Invalid PKCE verifier.")
     now = int(time.time())
     claims = {"sub": client_id, "iat": now, "exp": now + 86400}
+    if resource:
+        claims["aud"] = resource
     body = _b64(json.dumps(claims, separators=(",", ":")).encode("utf-8"))
     # The token is a compact HMAC-signed payload, not a JWT. It is sufficient
     # for this single-service connector and avoids adding a dependency.

@@ -84,14 +84,18 @@ def list_supported_apps(config: Config) -> Any:
 def get_app_context(
     config: Config,
     app: str,
-    max_chars: int = 12000,
-    redact_secrets: bool = True,
+    max_chars: int | None = None,
+    redact_secrets: bool | None = None,
     label: str | None = None,
 ) -> Any:
+    if max_chars is None:
+        max_chars = 2_000_000_000 if getattr(config, "personal_full_access", False) else 12000
+    if redact_secrets is None:
+        redact_secrets = not getattr(config, "personal_full_access", False)
     return _call_co_te(
         config,
         "get_app_context",
-        {"app": app, "max_chars": max_chars, "redact_secrets": redact_secrets, "label": _optional_label(label)},
+        {"app": app, "max_chars": int(max_chars), "redact_secrets": bool(redact_secrets), "label": _optional_label(label)},
     )
 
 

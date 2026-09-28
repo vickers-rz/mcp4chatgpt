@@ -62,6 +62,7 @@ class DownstreamToolInfo:
     downstream_id: str
     annotations: dict[str, Any] | None = None
     output_schema: dict[str, Any] | None = None
+    backend_instance_id: str = ""
 
 
 @dataclass

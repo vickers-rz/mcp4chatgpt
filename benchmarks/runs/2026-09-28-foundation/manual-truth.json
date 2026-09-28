@@ -1,0 +1,29 @@
+{
+  "not_for_model_context": true,
+  "short": {
+    "project": "fixture-only",
+    "revision": 7,
+    "status": "ready"
+  },
+  "aggregate": {
+    "count": 4,
+    "score_total": 25,
+    "top3": [
+      "c",
+      "a",
+      "d"
+    ]
+  },
+  "partial": {
+    "requested": 3,
+    "completed": 2,
+    "missing": [
+      "missing.json"
+    ]
+  },
+  "dataset_sha256": {
+    "one.json": "8e75eb66dadd662138ab3059e4cebba2607ad09063765aa307d963bd33a6a052",
+    "a.json": "879b04d6a621a23b2c61b2e1c3fb86fb4479baf3eb571d3642d000036206cf7d",
+    "b.json": "bb14ec911ab1afbe5a498edf4c8a5bfd2bb28770be35288fb7324d980bf01416"
+  }
+}

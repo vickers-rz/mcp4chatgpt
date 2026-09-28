@@ -1,0 +1,81 @@
+{
+  "kind": "deterministic_discovery_query_set",
+  "model_invoked": false,
+  "vector_service_used": false,
+  "ranking_order": [
+    "exact canonical name",
+    "name keyword/token",
+    "maintained explicit keyword",
+    "description",
+    "category",
+    "backend/source/alias tie-break evidence"
+  ],
+  "legacy": {
+    "cases": 5,
+    "top1_hits": 2,
+    "top5_hits": 2,
+    "top1_rate": 0.4,
+    "top5_rate": 0.4
+  },
+  "weighted": {
+    "cases": 5,
+    "top1_hits": 5,
+    "top5_hits": 5,
+    "top1_rate": 1.0,
+    "top5_rate": 1.0
+  },
+  "cases": [
+    {
+      "query": "PDF 编辑",
+      "expected": "pdf_insert_text",
+      "category": "pdf",
+      "legacy_top5": [],
+      "weighted_top5": [
+        "pdf_insert_text",
+        "pdf_redact_text"
+      ]
+    },
+    {
+      "query": "文件 写入",
+      "expected": "local_write_file",
+      "source": "local",
+      "legacy_top5": [],
+      "weighted_top5": [
+        "local_write_file"
+      ]
+    },
+    {
+      "query": "后台任务 start",
+      "expected": "local_start_job",
+      "category": "jobs",
+      "legacy_top5": [],
+      "weighted_top5": [
+        "local_start_job",
+        "local_job_status",
+        "local_list_jobs"
+      ]
+    },
+    {
+      "query": "chrome devtools navigate",
+      "expected": "devtools__navigate",
+      "backend": "chrome_devtools",
+      "legacy_top5": [
+        "devtools__navigate"
+      ],
+      "weighted_top5": [
+        "devtools__navigate"
+      ]
+    },
+    {
+      "query": "chrome headless navigate",
+      "expected": "headless__navigate",
+      "backend": "chrome_headless",
+      "legacy_top5": [
+        "headless__navigate"
+      ],
+      "weighted_top5": [
+        "headless__navigate"
+      ]
+    }
+  ]
+}

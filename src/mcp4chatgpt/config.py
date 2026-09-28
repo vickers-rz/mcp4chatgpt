@@ -74,6 +74,7 @@ class Config:
     computer_allowed_apps: tuple[str, ...] = ()
     computer_backend: str = "native"
     tool_exposure: str = "full"
+    personal_full_access: bool = False
 
     @property
     def mcp_url(self) -> str:
@@ -126,6 +127,9 @@ def load_config() -> Config:
     tool_exposure = os.environ.get("MCP_TOOL_EXPOSURE", "full").strip().lower()
     if tool_exposure not in {"full", "compact"}:
         raise ValueError("MCP_TOOL_EXPOSURE must be full or compact")
+    personal_full_access = os.environ.get("MCP_PERSONAL_FULL_ACCESS", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
 
     return Config(
         public_base_url=public_base_url,
@@ -158,4 +162,5 @@ def load_config() -> Config:
         computer_allowed_apps=computer_allowed_apps,
         computer_backend=computer_backend,
         tool_exposure=tool_exposure,
+        personal_full_access=personal_full_access,
     )

@@ -16,7 +16,7 @@ import subprocess
 from typing import Any
 
 from .config import Config
-from .safety import redact, truncate_text
+from .safety import response_redact, response_truncate
 
 
 class ChromeOpsError(RuntimeError):
@@ -99,8 +99,8 @@ return rows as text
                 "window_index": int(window_index),
                 "tab_index": int(tab_index),
                 "active": active == "true",
-                "title": redact(title),
-                "url": redact(url),
+                "title": response_redact(config, title),
+                "url": response_redact(config, url),
             }
         )
     return {
@@ -163,16 +163,16 @@ end tell
         raise ChromeOpsError("Chrome returned non-JSON page context.") from exc
 
     result: dict[str, Any] = {
-        "title": redact(str(data.get("title", ""))),
-        "url": redact(str(data.get("url", ""))),
-        "meta": {redact(str(k)): redact(str(v)) for k, v in dict(data.get("meta") or {}).items()},
+        "title": response_redact(config, str(data.get("title", ""))),
+        "url": response_redact(config, str(data.get("url", ""))),
+        "meta": {response_redact(config, str(k)): response_redact(config, str(v)) for k, v in dict(data.get("meta") or {}).items()},
     }
     if include_selection:
-        selection, selection_truncated = truncate_text(redact(str(data.get("selection", ""))), max_chars)
+        selection, selection_truncated = response_truncate(config, response_redact(config, str(data.get("selection", ""))), max_chars)
         result["selection"] = selection
         result["selection_truncated"] = selection_truncated
     if include_text:
-        text, text_truncated = truncate_text(redact(str(data.get("text", ""))), max_chars)
+        text, text_truncated = response_truncate(config, response_redact(config, str(data.get("text", ""))), max_chars)
         result["text"] = text
         result["text_truncated"] = text_truncated
     return result
@@ -227,14 +227,14 @@ end tell
         links.append(
             {
                 "index": link.get("index"),
-                "text": redact(str(link.get("text", ""))),
-                "href": redact(str(link.get("href", ""))),
-                "title": redact(str(link.get("title", ""))),
+                "text": response_redact(config, str(link.get("text", ""))),
+                "href": response_redact(config, str(link.get("href", ""))),
+                "title": response_redact(config, str(link.get("title", ""))),
             }
         )
     return {
-        "title": redact(str(data.get("title", ""))),
-        "url": redact(str(data.get("url", ""))),
+        "title": response_redact(config, str(data.get("title", ""))),
+        "url": response_redact(config, str(data.get("url", ""))),
         "links": links,
         "count": len(links),
         "total_links": int(data.get("totalLinks") or len(links)),

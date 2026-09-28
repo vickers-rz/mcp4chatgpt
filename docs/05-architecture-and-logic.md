@@ -129,6 +129,19 @@ and audit channel. Search and get are read-only; call has conservative effect
 hints. The catalog version hashes stable definitions, while the toolset hash
 also includes the exposed profile.
 
+Downstream `notifications/tools/list_changed` triggers bounded, paginated
+rediscovery on the client's event loop. Only complete tool tables are published;
+the manager reapplies allow/deny filters and the registry copies the definitions
+before updating versions. Failed rediscovery retains the last complete table and
+exposes `catalog_error` in downstream status. Discovery does not replay tool calls.
+Tools/list responses and their audit metadata share one snapshot. Search requires
+every whitespace-separated, casefolded term to match name, description, or source.
+
+This server still advertises `listChanged=false` to upstream clients. Clients
+must request the catalog again to see downstream updates; no upstream notification
+stream or configuration-file hot reload is implemented. Downstream servers that
+do not send change notifications retain their startup tool table until restarted.
+
 `MCP_TOOL_EXPOSURE=full` is the default and retains existing tools while
 adding the discovery entrypoints. `compact` lists server_info, all enabled
 computer tools, and the three discovery entrypoints. Exposure is a presentation

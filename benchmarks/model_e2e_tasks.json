@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "evidence_layer": "model_e2e",
+  "tasks": [
+    {
+      "task_id": "short-direct-001",
+      "task_type": "short_direct",
+      "goal": "Use one known capability to answer a small deterministic request and record whether discovery added avoidable overhead.",
+      "required_paths": ["direct_full", "progressive_discovery"],
+      "success_criteria": {
+        "correct": "Final answer matches the fixture truth.",
+        "complete": "No required field is omitted."
+      }
+    },
+    {
+      "task_id": "pdf-batch-001",
+      "task_type": "pdf_batch",
+      "goal": "Inspect the fixed multi-PDF dataset and report requested/completed counts, errors, and the known abnormal files.",
+      "required_paths": ["direct_full", "progressive_discovery", "available_batch"],
+      "success_criteria": {
+        "correct": "Counts and abnormal-file identities match the fixed dataset.",
+        "complete": "All files are accounted for, including failures."
+      }
+    },
+    {
+      "task_id": "paginated-aggregate-001",
+      "task_type": "paginated_aggregate",
+      "goal": "Traverse the fixed paginated dataset, report total row count, score total, and deterministic Top-5.",
+      "required_paths": ["direct_full", "progressive_discovery", "available_batch"],
+      "success_criteria": {
+        "correct": "Count, aggregate score, and Top-5 match fixture truth.",
+        "complete": "Every page is consumed exactly once or an explicit incomplete result is recorded."
+      }
+    }
+  ],
+  "notes": [
+    "available_batch means a real client-accessible dedicated batch/fixed orchestration path when one exists; do not substitute a hidden helper and label it model E2E.",
+    "Do not add a generic_code path until a real isolated executor exists.",
+    "Rotate run order across trials while keeping client/model, dataset, permission profile, and catalog version matched."
+  ]
+}

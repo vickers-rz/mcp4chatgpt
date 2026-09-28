@@ -23,7 +23,7 @@ from typing import Any
 
 from .config import Config
 from .retrieval import lexical_terms
-from .safety import resolve_allowed_path, truncate_text
+from .safety import resolve_allowed_path, response_truncate
 
 SUPPORTED_EXTENSIONS = {".md", ".txt", ".json", ".csv"}
 _STORE_LOCK = threading.RLock()
@@ -200,7 +200,7 @@ def search(config: Config, query: str, limit: int = 8) -> dict[str, Any]:
             score = len(query_tokens & chunk_tokens)
             if score <= 0:
                 continue
-            quote, _ = truncate_text(chunk["text"], 500)
+            quote, _ = response_truncate(config, chunk["text"], 500)
             hits.append(
                 {
                     "score": score,
@@ -224,10 +224,10 @@ def fetch(config: Config, source_id: str, chunk_id: str | None = None, max_chars
     if chunk_id:
         for chunk in source.get("chunks", []):
             if chunk["chunk_id"] == chunk_id:
-                text, truncated = truncate_text(chunk["text"], max_chars)
+                text, truncated = response_truncate(config, chunk["text"], max_chars)
                 return {"source_id": source_id, "chunk_id": chunk_id, "title": source["title"], "text": text, "truncated": truncated}
         raise ValueError(f"Unknown chunk_id for source {source_id}: {chunk_id}")
-    text, truncated = truncate_text(source["text"], max_chars)
+    text, truncated = response_truncate(config, source["text"], max_chars)
     return {"source_id": source_id, "title": source["title"], "url": source.get("url"), "path": source.get("path"), "text": text, "truncated": truncated}
 
 
