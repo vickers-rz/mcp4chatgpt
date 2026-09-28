@@ -117,20 +117,16 @@ uv run pytest -q
 
 P2 已在 [文档 34](34-web-read-result-classification-2026-09-28.md) 完成：`read_webpage` 现在返回 `ok / empty / login_required / challenge / access_blocked / timeout / unavailable` 和结构化 evidence，并明确不把页面拦截现象直接解释为“反向 GFW”。
 
+P3 已在 [文档 35](35-mcp-local-web-skill-2026-09-28.md) 完成服务端 Skill 供给：声明 `io.modelcontextprotocol/skills`，实现 `skills/list` / `skills/get` / `skill://` resource delivery，并对 manifest digest 做真实协议回归。
+
 下一阶段：
 
-1. **P3：MCP Skill**
-   - 实现 `io.modelcontextprotocol/skills` capability；
-   - `skills/list` / `skills/get`；
-   - 资源读取与摘要校验；
-   - 定义“云端访问失败 / 本机登录态 / 地域限制”触发条件。
-
-2. **P4：真实 ChatGPT 验收**
+1. **P4：真实 ChatGPT 验收**
    - 重扫工具/插件版本；
    - 确认 compact 顶层实际看到六入口；
    - 验证共享 URL、受限网页、登录态网页的真实路由。
 
-3. **P5：下游 MCP 暴露**
+2. **P5：下游 MCP 暴露**
    - 在需要时让其他 MCP 复用当前单实例 `/mcp`；
    - 保留 backend identity、page handle、revision 和错误语义。
 

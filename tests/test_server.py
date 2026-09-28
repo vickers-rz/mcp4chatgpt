@@ -152,6 +152,9 @@ class ServerTests(unittest.TestCase):
                         "tools": {"listChanged": False},
                         "resources": {"subscribe": False, "listChanged": False},
                         "prompts": {"listChanged": False},
+                        "extensions": {
+                            "io.modelcontextprotocol/skills": {},
+                        },
                     },
                 )
                 instructions = init["result"]["instructions"]

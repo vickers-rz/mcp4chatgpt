@@ -189,12 +189,21 @@ _CLIENT_INFO_META_KEY = "io.modelcontextprotocol/clientInfo"
 _CLIENT_CAPABILITIES_META_KEY = "io.modelcontextprotocol/clientCapabilities"
 _SERVER_INFO_META_KEY = "io.modelcontextprotocol/serverInfo"
 _CACHEABLE_MODERN_METHODS = frozenset(
-    {"server/discover", "tools/list", "resources/list", "resources/read", "prompts/list"}
+    {
+        "server/discover",
+        "tools/list",
+        "resources/list",
+        "resources/read",
+        "prompts/list",
+        "skills/list",
+        "skills/get",
+    }
 )
 _NAMED_MODERN_METHODS = {
     "tools/call": "name",
     "resources/read": "uri",
     "prompts/get": "name",
+    "skills/get": "uri",
 }
 
 _SERVER_INSTRUCTIONS = (
@@ -226,6 +235,9 @@ def _server_capabilities() -> dict[str, Any]:
         "tools": {"listChanged": False},
         "resources": {"subscribe": False, "listChanged": False},
         "prompts": {"listChanged": False},
+        "extensions": {
+            "io.modelcontextprotocol/skills": {},
+        },
     }
 
 
@@ -550,6 +562,16 @@ class Handler(BaseHTTPRequestHandler):
                 )
             elif method == "prompts/list":
                 result = {"prompts": []}
+            elif method == "skills/list":
+                cursor = params.get("cursor")
+                if cursor is not None and not isinstance(cursor, str):
+                    raise ValueError("skills/list cursor must be a string when provided.")
+                result = self.server.registry.list_skills(cursor)
+            elif method == "skills/get":
+                uri = params.get("uri")
+                if not isinstance(uri, str) or not uri:
+                    raise ValueError("skills/get uri must be a non-empty string.")
+                result = self.server.registry.get_skill(uri)
             elif method == "tools/call":
                 result = self.server.registry.call_tool(params.get("name", ""), params.get("arguments", {}), client_id)
             else:

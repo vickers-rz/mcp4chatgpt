@@ -42,7 +42,7 @@ from .capability_catalog import (
 )
 from .config import Config
 from . import chrome_ops, computer_ops, ext_ops, file_resources, knowledge_ops, local_ops, pdf_ops, terminal_ops, web_ops
-from . import browser_search, web_archive, web_read_status
+from . import browser_search, skill_resources, web_archive, web_read_status
 from .mcp_types import RawMCPToolResult
 from .downstream.manager import DownstreamMCPManager
 
@@ -1523,9 +1523,23 @@ class ToolRegistry:
                 }
                 for name in sorted(self._catalog_names)
             ]
-        return {"resources": tool_resources + file_resources.list_resources()}
+        return {
+            "resources": (
+                tool_resources
+                + skill_resources.list_resources()
+                + file_resources.list_resources()
+            )
+        }
+
+    def list_skills(self, cursor: str | None = None) -> dict[str, Any]:
+        return skill_resources.list_skills(cursor)
+
+    def get_skill(self, uri: str) -> dict[str, Any]:
+        return skill_resources.get_skill(uri)
 
     def read_tool_resource(self, uri: str, *, auth_required: bool) -> dict[str, Any]:
+        if skill_resources.is_skill_resource_uri(uri):
+            return skill_resources.read_resource(uri)
         if file_resources.is_file_resource_uri(uri):
             return file_resources.read_resource(self.config, uri)
         self.refresh_catalog()

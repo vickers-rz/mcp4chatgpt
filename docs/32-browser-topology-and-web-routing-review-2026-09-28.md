@@ -2,7 +2,7 @@
 
 日期：2026-09-28。性质：当前代码核查与设计建议；本报告没有实施新接口、Skill 或部署。
 
-后续实施状态见 [文档 33](33-local-web-top-level-exposure-2026-09-28.md) 与 [文档 34](34-web-read-result-classification-2026-09-28.md)：P1 的稳定高层 URL 入口和 compact 首层 search/read 已完成，P2 的七状态读取结果与 evidence 契约也已实现；当前完整 Python 套件 389 项通过，P3 Skill、部署和真实 ChatGPT 验收仍待完成。
+后续实施状态见 [文档 33](33-local-web-top-level-exposure-2026-09-28.md)、[文档 34](34-web-read-result-classification-2026-09-28.md) 与 [文档 35](35-mcp-local-web-skill-2026-09-28.md)：P1 的稳定高层 URL 入口和 compact 首层 search/read 已完成，P2 的七状态读取结果与 evidence 契约也已实现；P3 Skill 供给也已完成，当前完整 Python 套件 400 项通过；部署、Scan Tools 和真实 ChatGPT 验收仍待完成。
 
 ## 0. 核查基线与结论
 
@@ -237,11 +237,14 @@ network_region / region_verified
 只有在明确允许替代会话、确认身份并重新取得页面句柄后，才切换另一条本机浏览器通道。
 点击、提交或脚本执行超时后不跨后端重放，因为动作可能已发生。
 
-### 3.3 项目当前没有 Skill 供给实现
+### 3.3 Skill 供给缺口与后续实现
 
-代码证据：`server.py:224` 未声明 skills extension；`server.py:544` 的 resources/read
-只进入现有工具定义/文件资源分发；prompts/list 返回空；没有 skills/list、skills/get
-或 skill:// 读取路由。initialize.instructions 只是简短服务器说明，不是 Skill 包。
+本节记录的是最初核查时的缺口。当时 `server.py` 未声明 skills extension，resources/read
+只进入工具定义/文件资源分发，也没有 skills/list、skills/get 或 skill:// 读取路由。
+
+该缺口现已由 [文档 35](35-mcp-local-web-skill-2026-09-28.md) 的 P3 实现补齐：服务端已声明
+`io.modelcontextprotocol/skills`，并提供 `local-web-access` 的 list/get/resource manifest。
+真实 ChatGPT Scan Tools 导入仍属于 P4。
 
 当前官方的 MCP 导入方式要求：在 `capabilities.extensions` 声明
 `io.modelcontextprotocol/skills`，提供 `skills/list`、`skills/get`，并通过 resources/read

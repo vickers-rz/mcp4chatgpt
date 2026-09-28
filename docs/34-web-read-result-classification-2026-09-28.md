@@ -169,15 +169,13 @@ P1/P2 相关 focused suite：
 
 5 条 warning 仍为既有 PyMuPDF/SWIG DeprecationWarning。
 
-## 8. 下一阶段
+## 8. 后续阶段
 
-下一阶段是 P3：MCP Skill。
-
-Skill 不应重新解析异常字符串，而应直接依赖 `read_webpage.status`：
+P3 已在 [文档 35](35-mcp-local-web-skill-2026-09-28.md) 实现服务端 MCP Skill 供给协议。Skill 不重新解析异常字符串，而是直接依赖 `read_webpage.status`：
 
 - `ok`：使用正文；
 - `empty/login_required/challenge/access_blocked`：说明本机浏览器已经到达页面，但正文不可直接作为正常来源；
 - `timeout/unavailable`：说明本机 browser path 当前不可用；
 - 对“云端失败后使用本机 MCP”的策略只做路由，不把 `access_blocked` 自动解释为反向 GFW。
 
-P3 仍需实现 MCP Skills capability/list/get/resource delivery；真实 ChatGPT 工具扫描、缓存刷新和端到端路由验收留到 P4。
+当前下一步为 P4：部署后执行真实 ChatGPT Scan Tools、确认 Skill 导入，并做工具缓存刷新和端到端路由验收。
