@@ -198,11 +198,11 @@ _NAMED_MODERN_METHODS = {
 }
 
 _SERVER_INSTRUCTIONS = (
-    "MCP4ChatGPT provides local, PDF, web and knowledge tools. Before ext_* work call "
-    "ext_connection_status; prefer explicit IDs and least-privileged tools. Use ext_* for the bridge, "
-    "chrome_devtools__* for snapshots/network/interaction, and ext_run_js only if no dedicated tool fits. "
-    "For non-text files call local_expose_file then resource_link/resources/read. Use browser_*/chrome_* "
-    "as read-only fallback if the extension is unavailable. Discover via capability_search/get; invoke "
+    "MCP4ChatGPT provides local, PDF and web tools. Prefer search_web for search and "
+    "read_webpage for supplied URLs; both use local Chrome by default. Before other ext_* work call "
+    "ext_connection_status; prefer explicit IDs and least-privileged tools. Use chrome_devtools__* for "
+    "snapshots/network/interaction, and ext_run_js only if no dedicated tool fits. For non-text files call "
+    "local_expose_file then resource_link/resources/read. Discover via capability_search/get; invoke "
     "catalog tools with capability_call."
 )
 

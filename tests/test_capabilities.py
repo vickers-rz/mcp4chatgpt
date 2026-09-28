@@ -54,7 +54,10 @@ def test_full_default_and_compact_exposure_contract(tmp_path):
     assert "local_read_text" in names
     compact = ToolRegistry(replace(config, tool_exposure="compact"), AuditLogger(config.audit_log))
     names = [x["name"] for x in compact.list_tools(auth_required=False)["tools"]]
-    assert names == ["server_info", "capability_search", "capability_get", "capability_call"]
+    assert names == [
+        "server_info", "search_web", "read_webpage",
+        "capability_search", "capability_get", "capability_call",
+    ]
     assert any(n.startswith("computer_") for n in compact._catalog_names)
     assert not any(n.startswith("computer_") for n in names)
     assert "capability_list" not in names
@@ -67,6 +70,8 @@ def test_full_default_and_compact_exposure_contract(tmp_path):
     path = compact.config.allowed_roots[0] / "kept.txt"
     path.write_text("still callable", encoding="utf-8")
     assert "still callable" in json.dumps(compact.call_tool("local_read_text", {"path": str(path)}))
+    recovery = compact.call_tool("capability_search", {"query": "反向GFW"})["structuredContent"]
+    assert {"search_web", "read_webpage"} <= {match["name"] for match in recovery["matches"]}
 
 
 def test_search_casefold_source_ranking_and_truncation(registry):

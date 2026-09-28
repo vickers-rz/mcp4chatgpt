@@ -107,6 +107,11 @@ def test_real_downstream_runtime_notification_updates_directory(tmp_path, exposu
         r = ToolRegistry(c, AuditLogger(c.audit_log), downstream_manager=m)
         assert 'docs__lookup' in r._catalog_name_set
         assert 'docs__blocked' not in r._catalog_name_set
+        if exposure == 'compact':
+            assert [tool['name'] for tool in r.list_tools(auth_required=False)['tools']] == [
+                'server_info', 'search_web', 'read_webpage',
+                'capability_search', 'capability_get', 'capability_call',
+            ]
         versions = r.catalog_version
         for generation in (1, 2):
             r.call_tool('docs__advance', {})
@@ -126,6 +131,11 @@ def test_real_downstream_runtime_notification_updates_directory(tmp_path, exposu
             assert 'docs__lookup' not in r._catalog_name_set
             assert 'docs__blocked' not in r._catalog_name_set
             assert r._capability_search({'query':'docs__fetch'})['matches'][0]['name'] == 'docs__fetch'
+            if exposure == 'compact':
+                assert [tool['name'] for tool in r.list_tools(auth_required=False)['tools']] == [
+                    'server_info', 'search_web', 'read_webpage',
+                    'capability_search', 'capability_get', 'capability_call',
+                ]
             uri = 'mcp4chatgpt://tools/docs__fetch'
             assert uri in {x['uri'] for x in r.list_tool_resources()['resources']}
             assert json.loads(r.read_tool_resource(uri, auth_required=False)['contents'][0]['text']) == definition_without_auth(definition)

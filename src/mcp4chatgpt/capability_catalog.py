@@ -60,6 +60,7 @@ _CATEGORY_MEMBERS: dict[str, frozenset[str]] = {
         "chrome_list_tabs", "chrome_get_active_tab_context",
         "browser_list_tabs", "browser_current_tab", "browser_get_page_text",
         "browser_get_selection", "browser_get_links",
+        "search_web", "read_webpage",
         "ext_connection_status", "ext_list_tabs", "ext_get_active_tab",
         "ext_get_dom", "ext_get_selection", "ext_screenshot", "ext_navigate",
         "ext_click_element", "ext_fill_input", "ext_run_js",
@@ -98,6 +99,14 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
     "browser_get_page_text": ("browser", "page text", "read", "浏览器", "网页文本"),
     "browser_get_selection": ("browser", "selection", "浏览器", "选中文本"),
     "browser_get_links": ("browser", "links", "浏览器", "链接"),
+    "search_web": (
+        "browser", "local chrome", "web search", "browser session",
+        "网页搜索", "本机浏览器", "本机 chrome", "反向gfw", "云端访问失败", "地域限制",
+    ),
+    "read_webpage": (
+        "browser", "local chrome", "read webpage", "url", "browser session",
+        "读取网页", "本机浏览器", "本机 chrome", "反向gfw", "云端访问失败", "地域限制", "登录态",
+    ),
     "ext_connection_status": ("browser", "chrome extension", "extension", "浏览器扩展", "连接状态"),
     "ext_list_tabs": ("browser", "chrome extension", "tabs", "浏览器扩展", "标签页"),
     "ext_get_active_tab": ("browser", "chrome extension", "active tab", "浏览器扩展", "当前标签页"),
@@ -165,6 +174,12 @@ _EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
     ),
     "capability_call": (
         {"name": "server_info", "arguments": {}},
+    ),
+    "search_web": (
+        {"query": "site access policy", "result_count": 3, "backend": "browser"},
+    ),
+    "read_webpage": (
+        {"url": "https://example.com/", "max_chars": 30000},
     ),
 }
 

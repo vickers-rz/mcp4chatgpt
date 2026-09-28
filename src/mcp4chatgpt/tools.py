@@ -186,8 +186,10 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_read_webpage",
         "ext_web_rag",
         "ext_archive_webpage",
+        "search_web",
+        "read_webpage",
     }
-    open_world = (name.startswith("web_") and not name.startswith("web_archive_")) or name in {"ext_search_web", "ext_read_webpage", "ext_web_rag", "ext_archive_webpage"} or name == "search_web" or name in {
+    open_world = (name.startswith("web_") and not name.startswith("web_archive_")) or name in {"ext_search_web", "ext_read_webpage", "ext_web_rag", "ext_archive_webpage"} or name in {"search_web", "read_webpage"} or name in {
         "computer_list_apps", "computer_get_state", "computer_screenshot", "computer_list_displays", "computer_screenshot_display", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll", "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard",
         "local_run_command",
         "local_start_job",
@@ -284,6 +286,27 @@ def _web_add_to_knowledge(config: Config, args: dict[str, Any]) -> dict[str, Any
     title = data.get("metadata", {}).get("title") or args.get("title") or args["url"]
     added = knowledge_ops.add_source(config, title=title, text=text, url=args["url"], metadata={"web_result": data.get("metadata", {})})
     return {"scrape": scraped, "knowledge": added}
+
+
+def _read_webpage(config: Config, args: dict[str, Any]) -> dict[str, Any]:
+    """Read one supplied URL through the connected local Chrome session.
+
+    This is the stable model-facing wrapper around the Extension reader. It
+    deliberately has no cloud/API fallback: callers asking for the local
+    browser network/session context get either that context or an error.
+    """
+    requested_url = str(args["url"])
+    page = browser_search.read(
+        config,
+        requested_url,
+        max_chars=int(args.get("max_chars", 30000)),
+    )
+    return {
+        "requested_url": requested_url,
+        **page,
+        "backend": "browser",
+        "fallback_used": False,
+    }
 
 
 def _search_web(config: Config, args: dict[str, Any]) -> dict[str, Any]:
@@ -735,6 +758,23 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
             ),
             _search_web,
         ),
+        Tool(
+            "read_webpage",
+            "Read a supplied URL through the connected local Chrome session and return rendered page text. Use this when cloud access fails, a site depends on the user's browser session, or the user explicitly requests local-browser access. This tool never falls back to a cloud/API reader.",
+            _schema(
+                {
+                    "url": {"type": "string"},
+                    "max_chars": {
+                        "type": "integer",
+                        "minimum": 1000,
+                        "maximum": 60000,
+                        "default": 30000,
+                    },
+                },
+                ["url"],
+            ),
+            _read_webpage,
+        ),
         Tool("web_scrape", "Scrape a web page via Firecrawl.", _schema({"url": {"type": "string"}, "formats": {"type": "array", "items": {"type": "string"}}}, ["url"]), lambda c, a: web_ops.scrape(c, a["url"], a.get("formats"))),
         Tool("web_crawl", "Crawl a website via Firecrawl.", _schema({"url": {"type": "string"}, "limit": {"type": "integer", "default": 10}, "max_depth": {"type": "integer", "default": 2}}, ["url"]), lambda c, a: web_ops.crawl(c, a["url"], int(a.get("limit", 10)), int(a.get("max_depth", 2)))),
         Tool("web_map", "Map URLs from a website via Firecrawl.", _schema({"url": {"type": "string"}, "limit": {"type": "integer", "default": 100}}, ["url"]), lambda c, a: web_ops.map_site(c, a["url"], int(a.get("limit", 100)))),
@@ -1105,16 +1145,20 @@ class ToolRegistry:
         if exposure not in {"full", "compact"}:
             raise ValueError("MCP_TOOL_EXPOSURE must be full or compact")
         self.tool_exposure = exposure
-        if exposure == "compact":
-            visible = tuple(name for name in self._catalog_names if name == "server_info")
-            self._all_listed_names = visible + self._listed_capability_tool_names
-        else:
-            self._all_listed_names = self._catalog_names + self._listed_capability_tool_names
+        self._all_listed_names = self._select_listed_names()
         self._listed_tool_name_set = frozenset(self._all_listed_names)
         self.toolset_hash = self._definition_hash(self._all_listed_names, auth_required=False, exposure=exposure)
         for name in self._listed_tool_names:
             self.tools[f"MCP4ChatGPT.{name}"] = self.tools[name]
         self._validate_catalog_examples()
+
+    def _select_listed_names(self) -> tuple[str, ...]:
+        """Apply presentation policy without changing capability reachability."""
+        if self.tool_exposure == "compact":
+            direct = ("server_info", "search_web", "read_webpage")
+            visible = tuple(name for name in direct if name in self._catalog_name_set)
+            return visible + self._listed_capability_tool_names
+        return self._catalog_names + self._listed_capability_tool_names
 
     def _definition_hash(self, names: tuple[str, ...], *, auth_required: bool, exposure: str = "") -> str:
         definitions = [self.tools[name].definition(auth_required=auth_required) for name in sorted(names)]
@@ -1209,11 +1253,7 @@ class ToolRegistry:
         }
         self._rebuild_catalog_entries()
         self.catalog_version = self._catalog_hash()
-        if self.tool_exposure == "compact":
-            visible = tuple(name for name in self._catalog_names if name == "server_info")
-            self._all_listed_names = visible + self._listed_capability_tool_names
-        else:
-            self._all_listed_names = self._catalog_names + self._listed_capability_tool_names
+        self._all_listed_names = self._select_listed_names()
         self._listed_tool_name_set = frozenset(self._all_listed_names)
         self.toolset_hash = self._definition_hash(
             self._all_listed_names,
@@ -1496,9 +1536,36 @@ class ToolRegistry:
     def _channel_for(self, name: str) -> str:
         # Caller holds _catalog_lock, so tool and audit identity are selected
         # from the same generation before validation or handler execution.
+        if name in {"search_web", "read_webpage"}:
+            return "web"
         return self._downstream_tool_channels.get(
             name, "extension" if name.startswith("ext_") else "native",
         )
+
+    @staticmethod
+    def _web_audit_fields(
+        name: str, arguments: dict[str, Any], result: Any | None = None,
+    ) -> dict[str, Any]:
+        if name == "read_webpage":
+            return {"backend": "browser"}
+        if name != "search_web":
+            return {}
+        requested = str(arguments.get("backend", "browser")).strip().lower()
+        fields: dict[str, Any] = {"requested_backend": requested}
+        if isinstance(result, dict):
+            actual = result.get("backend")
+            if actual in {"browser", "api"}:
+                fields["backend"] = actual
+            engine = result.get("engine")
+            if isinstance(engine, str) and engine:
+                fields["engine"] = engine
+            return fields
+        if requested == "browser":
+            fields["backend"] = "browser"
+        elif requested in {"brave", "firecrawl"}:
+            fields["backend"] = "api"
+            fields["engine"] = requested
+        return fields
 
     def call_tool(
         self, name: str, arguments: dict[str, Any], client_id: str = "",
@@ -1578,7 +1645,7 @@ class ToolRegistry:
             # MCP text content while preserving structuredContent for clients
             # that can use it.
             result = tool.handler(self.config, arguments or {})
-            audit_fields: dict[str, Any] = {}
+            audit_fields = self._web_audit_fields(name, arguments, result)
             audit_ok = not (isinstance(result, RawMCPToolResult) and result.value.get("isError") is True)
             if name.startswith("computer_"):
                 outcome = result.value.get("structuredContent", {}) if isinstance(result, RawMCPToolResult) else result
@@ -1605,8 +1672,10 @@ class ToolRegistry:
                 return result.value
             return _ok(result)
         except Exception as exc:
+            audit_fields = self._web_audit_fields(name, arguments)
             self.audit.log("tool_call", tool=name, client_id=client_id, ok=False, error=str(exc), channel=channel,
                            run_id=context.run_id, entrypoint=context.entrypoint, catalog_version=catalog_version,
                            capability_revision=capability_revision,
-                           **({"invoked_via": invoked_via} if invoked_via else {}))
+                           **({"invoked_via": invoked_via} if invoked_via else {}),
+                           **audit_fields)
             raise
