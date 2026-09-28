@@ -11,10 +11,10 @@ SKILL_URI = f"skill://mcp4chatgpt/{SKILL_NAME}/SKILL.md"
 
 SKILL_MD = """---
 name: local-web-access
-description: Use MCP4ChatGPT local Chrome to read a supplied URL or search when cloud web access fails, a site needs the user's existing browser session, or the user explicitly asks for local-browser access.
+description: Use MCP4ChatGPT local Chrome / 本机 Chrome for URL reading or web search when the user asks for the local browser, current logged-in session / 当前登录态, 4GPT or read_webpage, or when cloud web access failed, was blocked, or returned no usable body.
 ---
 
-Use this skill for browser retrieval through MCP4ChatGPT when the user supplies a URL, explicitly asks for local-browser access, needs an existing Chrome session, or a cloud web path has failed or returned no usable page body.
+Use this skill for browser retrieval through MCP4ChatGPT when the user explicitly asks for 本机 Chrome / 本地浏览器 / 4GPT / read_webpage, needs an existing logged-in Chrome session, or a cloud web path has failed, was blocked, or returned no usable page body. Do not activate this skill for ordinary web research when the user has not requested the local browser/session and normal web access is sufficient.
 
 1. For a supplied URL, call `read_webpage`. For web discovery, call `search_web` with `backend=browser`. Do not use `capability_search` as internet search.
 2. Inspect `read_webpage.status`, `url`, `text`, `truncated`, and `evidence` before using the result. Do not infer success from `backend=browser` alone.

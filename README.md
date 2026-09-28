@@ -95,8 +95,9 @@ This uses the public OAuth origin `https://mcp.runzhe.uk`, listens on all IPv4
 network interfaces (`0.0.0.0`), and leaves the tunnel managed by N100. This
 restores the network settings used before commit `000b7f3` (2026-09-23).
 You can also run `./MCP4ChatGPT.command restart-public` directly.
-The public profile defaults to `compact`: `server_info`, `capability_search`,
-`capability_get`, and `capability_call`. Other capabilities are discovered on demand.
+The public profile defaults to `compact`: `server_info`, `search_web`,
+`read_webpage`, `capability_search`, `capability_get`, and `capability_call`.
+Other capabilities are discovered on demand.
 For a full-list comparison or rollback, run
 `MCP_PUBLIC_TOOL_EXPOSURE=full ./MCP4ChatGPT.command restart-public`.
 Plain `start` / `restart` use local defaults and cannot serve the N100 tunnel.
@@ -202,6 +203,23 @@ invisible to ChatGPT until this app-side snapshot is refreshed.
 Chrome-extension reload is a separate operation: use it after changing
 `src/chrome_extension/*`, not as a substitute for refreshing ChatGPT's MCP tool
 snapshot.
+
+### Personal ChatGPT Skill without developer identity verification
+
+The repository includes a ready-to-copy
+[`local-web-access` personal Skill](chatgpt_skills/local-web-access/SKILL.md) and its
+[`agents/openai.yaml`](chatgpt_skills/local-web-access/agents/openai.yaml) MCP
+dependency. Create it at [ChatGPT Skill editor](https://chatgpt.com/skills/editor)
+after connecting 4GPT. This path uses the personal Skills page and does not
+require the developer identity verification shown by the public plugin
+submission portal. The MCP connection and OAuth authorization are still
+required. Follow the [installation and live verification guide](docs/36-chatgpt-personal-skill-2026-09-29.md).
+
+The MCP-advertised Skill remains available for the separate public Scan Tools
+import path. Refreshing the personal 4GPT plugin's tools does not import that
+server Skill into the personal Skills page. Explicitly selecting the personal
+Skill is the reliable routing path; implicit invocation is a best-effort
+convenience and is not treated as a correctness guarantee.
 
 ## Open WebUI
 

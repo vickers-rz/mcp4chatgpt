@@ -17,9 +17,10 @@ def test_skill_catalog_frontmatter_and_digest_match_resource_bytes():
     assert skill["frontmatter"] == {
         "name": "local-web-access",
         "description": (
-            "Use MCP4ChatGPT local Chrome to read a supplied URL or search when "
-            "cloud web access fails, a site needs the user's existing browser "
-            "session, or the user explicitly asks for local-browser access."
+            "Use MCP4ChatGPT local Chrome / 本机 Chrome for URL reading or web "
+            "search when the user asks for the local browser, current logged-in "
+            "session / 当前登录态, 4GPT or read_webpage, or when cloud web access "
+            "failed, was blocked, or returned no usable body."
         ),
     }
     assert len(skill["resources"]) == 1

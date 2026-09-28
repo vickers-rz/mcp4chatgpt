@@ -266,3 +266,5 @@ tests/test_server.py
 - 云端读取失败后 ChatGPT 一定会自动选择本机 MCP。
 
 OpenAI 当前将 MCP Skill 导入作为 Scan Tools 时的静态快照；Skill 更新后需要重新扫描。P4 应在部署后真实执行 Scan Tools，并用直接触发、间接触发、云端失败、本机登录态、challenge/access_blocked 等用例验收。
+
+2026-09-29 更新：当前个人插件连接的“刷新工具”没有将服务端 Skill 导入个人 Skills 页面；公开插件提交入口的 Scan Tools 要求开发者身份验证。已另行通过个人 [Skill 编辑器通路](36-chatgpt-personal-skill-2026-09-29.md)创建并验证 `local-web-access`，该通路不改变上述 MCP 导入协议或公开提交入口的要求。

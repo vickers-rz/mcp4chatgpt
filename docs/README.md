@@ -2,6 +2,7 @@
 
 ## Current implementation and operation
 
+- [ChatGPT personal Skill installation, 2026-09-29](36-chatgpt-personal-skill-2026-09-29.md): ready-to-copy `local-web-access` Skill, MCP dependency, installation without public-submission developer identity verification, and real-chat verification.
 - [Architecture and logic](05-architecture-and-logic.md): runtime topology, request flow, configuration, and deployment.
 - [Personal full-access implementation and acceptance](26-personal-full-access-plan.md): implemented personal full-access profile covering co-te, shell/rm, raw response output, and full Computer Use while retaining authentication, audit, workspace transactions, durable-job semantics, and capability/backend identity checks.
 - [mcpc protocol acceptance](20-mcpc-protocol-acceptance.md): pinned external MCP client protocol tests and OAuth acceptance limits.
