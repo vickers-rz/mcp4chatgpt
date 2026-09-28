@@ -153,6 +153,13 @@ class OperationStore:
         with self._connection() as db:
             return self._read(db, key.encoded())
 
+    def binding(self, key: OperationKey) -> dict | None:
+        """Read the immutable request binding without changing operation state."""
+        with self._connection() as db:
+            row = db.execute("SELECT kind, fingerprint FROM operations WHERE key=?",
+                             (key.encoded(),)).fetchone()
+            return {"kind": row[0], "fingerprint": row[1]} if row else None
+
     def events(self, key: OperationKey) -> list[dict]:
         with self._connection() as db:
             return [json.loads(row[0]) for row in db.execute(

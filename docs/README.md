@@ -13,6 +13,8 @@
 
 ## Reviews and acceptance
 
+- [File operation reconciliation, 2026-09-28](31-file-operation-reconciliation-2026-09-28.md): strict standalone write/patch executor, durable evidence, explicit reconciliation and crash tests; production tool integration remains pending.
+
 - [Operations store prototype, 2026-09-28](30-operations-store-prototype-2026-09-28.md): isolated SQLite operation ledger, idempotency, revision CAS, and process-crash tests; not connected to production tools.
 
 - [Foundation baseline and manual benchmark, 2026-09-28](29-foundation-baseline-and-manual-benchmark-2026-09-28.md): captured baseline, fixed benchmark results, ChatGPT manual comparison kit, and transaction contract v0.1.

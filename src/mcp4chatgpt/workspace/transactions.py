@@ -31,13 +31,15 @@ def _lock_dir(state_dir: Path) -> Path:
 def file_transaction_lock(
     state_dir: Path,
     target: Path,
+    *,
+    blocking: bool = True,
 ) -> Iterator[None]:
     lock_dir = _lock_dir(state_dir)
     lock_dir.mkdir(parents=True, exist_ok=True)
     lock_name = hashlib.sha256(str(target).encode("utf-8")).hexdigest() + ".lock"
     fd = os.open(lock_dir / lock_name, os.O_RDWR | os.O_CREAT, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
         yield
     finally:
         fcntl.flock(fd, fcntl.LOCK_UN)
