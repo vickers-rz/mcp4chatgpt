@@ -13,6 +13,8 @@
 
 ## Reviews and acceptance
 
+- [Browser topology and web routing review, 2026-09-28](32-browser-topology-and-web-routing-review-2026-09-28.md): current Extension/CDP topology, compact exposure, live health snapshot, and proposed local-web Skill routing.
+
 - [File operation reconciliation, 2026-09-28](31-file-operation-reconciliation-2026-09-28.md): strict standalone write/patch executor, durable evidence, explicit reconciliation and crash tests; production tool integration remains pending.
 
 - [Operations store prototype, 2026-09-28](30-operations-store-prototype-2026-09-28.md): isolated SQLite operation ledger, idempotency, revision CAS, and process-crash tests; not connected to production tools.
