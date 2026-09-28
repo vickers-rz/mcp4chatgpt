@@ -42,7 +42,7 @@ from .capability_catalog import (
 )
 from .config import Config
 from . import chrome_ops, computer_ops, ext_ops, file_resources, knowledge_ops, local_ops, pdf_ops, terminal_ops, web_ops
-from . import browser_search, web_archive
+from . import browser_search, web_archive, web_read_status
 from .mcp_types import RawMCPToolResult
 from .downstream.manager import DownstreamMCPManager
 
@@ -296,14 +296,31 @@ def _read_webpage(config: Config, args: dict[str, Any]) -> dict[str, Any]:
     browser network/session context get either that context or an error.
     """
     requested_url = str(args["url"])
-    page = browser_search.read(
-        config,
-        requested_url,
-        max_chars=int(args.get("max_chars", 30000)),
-    )
+    try:
+        page = browser_search.read(
+            config,
+            requested_url,
+            max_chars=int(args.get("max_chars", 30000)),
+        )
+    except (RuntimeError, TimeoutError) as exc:
+        status, evidence = web_read_status.classify_error(exc)
+        return {
+            "requested_url": requested_url,
+            "url": requested_url,
+            "text": "",
+            "truncated": False,
+            "status": status,
+            "evidence": evidence,
+            "backend": "browser",
+            "fallback_used": False,
+        }
+
+    status, evidence = web_read_status.classify_page(page)
     return {
         "requested_url": requested_url,
         **page,
+        "status": status,
+        "evidence": evidence,
         "backend": "browser",
         "fallback_used": False,
     }
@@ -760,7 +777,7 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
         ),
         Tool(
             "read_webpage",
-            "Read a supplied URL through the connected local Chrome session and return rendered page text. Use this when cloud access fails, a site depends on the user's browser session, or the user explicitly requests local-browser access. This tool never falls back to a cloud/API reader.",
+            "Read a supplied URL through the connected local Chrome session and return rendered page text plus a conservative status: ok, empty, login_required, challenge, access_blocked, timeout, or unavailable. Evidence records the observable signals used; this tool never infers censorship from one page and never falls back to a cloud/API reader.",
             _schema(
                 {
                     "url": {"type": "string"},
@@ -1547,7 +1564,13 @@ class ToolRegistry:
         name: str, arguments: dict[str, Any], result: Any | None = None,
     ) -> dict[str, Any]:
         if name == "read_webpage":
-            return {"backend": "browser"}
+            fields: dict[str, Any] = {"backend": "browser"}
+            if isinstance(result, dict):
+                status = result.get("status")
+                if status in web_read_status.READ_STATUSES:
+                    fields["read_status"] = status
+                    fields["retrieval_ok"] = status == "ok"
+            return fields
         if name != "search_web":
             return {}
         requested = str(arguments.get("backend", "browser")).strip().lower()

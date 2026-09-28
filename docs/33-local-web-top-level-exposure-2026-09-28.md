@@ -113,27 +113,24 @@ uv run pytest -q
 
 此前的 162 项 P1 相关回归记录仍可作为前一阶段证据；本记录以本次 **111 focused passed + 375 full passed / 11 skipped** 作为 P1 收尾后的最新代码级验收结果。
 
-## 4. 尚未实施
+## 4. 后续阶段
 
-下一阶段保持文档 32 的顺序：
+P2 已在 [文档 34](34-web-read-result-classification-2026-09-28.md) 完成：`read_webpage` 现在返回 `ok / empty / login_required / challenge / access_blocked / timeout / unavailable` 和结构化 evidence，并明确不把页面拦截现象直接解释为“反向 GFW”。
 
-1. **P2：读取结果分类**
-   - 区分正文成功、空正文、登录墙、验证码/挑战、拒绝访问、超时等；
-   - 返回结构化 status + evidence；
-   - 不把任意 HTTP 403 简化成“反向 GFW”。
+下一阶段：
 
-2. **P3：MCP Skill**
+1. **P3：MCP Skill**
    - 实现 `io.modelcontextprotocol/skills` capability；
    - `skills/list` / `skills/get`；
    - 资源读取与摘要校验；
    - 定义“云端访问失败 / 本机登录态 / 地域限制”触发条件。
 
-3. **P4：真实 ChatGPT 验收**
+2. **P4：真实 ChatGPT 验收**
    - 重扫工具/插件版本；
    - 确认 compact 顶层实际看到六入口；
    - 验证共享 URL、受限网页、登录态网页的真实路由。
 
-4. **P5：下游 MCP 暴露**
+3. **P5：下游 MCP 暴露**
    - 在需要时让其他 MCP 复用当前单实例 `/mcp`；
    - 保留 backend identity、page handle、revision 和错误语义。
 

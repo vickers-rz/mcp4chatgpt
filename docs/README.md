@@ -13,6 +13,7 @@
 
 ## Reviews and acceptance
 
+- [Local Web read-result classification (P2), 2026-09-28](34-web-read-result-classification-2026-09-28.md): seven-state `read_webpage` result contract, observable evidence, conservative blocker classification, structured timeout/unavailable handling, and 389-pass Python-suite acceptance.
 - [Local Web top-level exposure implementation, 2026-09-28](33-local-web-top-level-exposure-2026-09-28.md): stable `read_webpage`, six-tool compact exposure, web-route audit/annotations, failure-no-fallback regressions, and 375-pass Python-suite acceptance.
 - [Browser topology and web routing review, 2026-09-28](32-browser-topology-and-web-routing-review-2026-09-28.md): current Extension/CDP topology, compact exposure, live health snapshot, and proposed local-web Skill routing.
 

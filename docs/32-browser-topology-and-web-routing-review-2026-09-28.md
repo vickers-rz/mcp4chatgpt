@@ -2,7 +2,7 @@
 
 日期：2026-09-28。性质：当前代码核查与设计建议；本报告没有实施新接口、Skill 或部署。
 
-后续实施状态见 [文档 33](33-local-web-top-level-exposure-2026-09-28.md)：P1 的稳定高层 URL 入口、compact 首层 search/read、审计/annotations 收尾均已在开发分支实现；focused 111 项与完整 Python 套件 375 项通过，部署和真实 ChatGPT 验收仍待完成。
+后续实施状态见 [文档 33](33-local-web-top-level-exposure-2026-09-28.md) 与 [文档 34](34-web-read-result-classification-2026-09-28.md)：P1 的稳定高层 URL 入口和 compact 首层 search/read 已完成，P2 的七状态读取结果与 evidence 契约也已实现；当前完整 Python 套件 389 项通过，P3 Skill、部署和真实 ChatGPT 验收仍待完成。
 
 ## 0. 核查基线与结论
 

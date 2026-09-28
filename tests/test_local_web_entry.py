@@ -18,7 +18,7 @@ def test_read_webpage_uses_local_browser_without_cloud_fallback(tmp_path):
         return_value={
             "url": "https://example.test/final",
             "title": "Example",
-            "text": "rendered",
+            "text": "rendered page body " * 12,
             "truncated": False,
         },
     ) as browser:
@@ -36,24 +36,49 @@ def test_read_webpage_uses_local_browser_without_cloud_fallback(tmp_path):
     assert result["url"] == "https://example.test/final"
     assert result["backend"] == "browser"
     assert result["fallback_used"] is False
+    assert result["status"] == "ok"
+    assert result["evidence"]["signals"] == ["meaningful_rendered_text"]
 
 
 @pytest.mark.parametrize(
-    "error",
+    ("error", "expected_status"),
     [
-        RuntimeError("extension disconnected"),
-        TimeoutError("browser read timed out"),
-        ValueError("browser read failed"),
+        (RuntimeError("Chrome extension is not connected"), "unavailable"),
+        (RuntimeError("browser read timed out"), "timeout"),
+        (TimeoutError("browser read timed out"), "timeout"),
     ],
 )
-def test_read_webpage_failure_never_falls_back_to_cloud(tmp_path, error):
+def test_read_webpage_runtime_failure_is_structured_without_cloud_fallback(
+    tmp_path, error, expected_status,
+):
     config = make_config(tmp_path)
     with (
         mock.patch("mcp4chatgpt.tools.browser_search.read", side_effect=error) as browser,
         mock.patch("mcp4chatgpt.tools.web_ops.scrape") as scrape,
         mock.patch("mcp4chatgpt.tools.web_ops.combined_search") as combined,
     ):
-        with pytest.raises(type(error), match=str(error)):
+        result = _read_webpage(
+            config,
+            {"url": "https://example.test/start", "max_chars": 12000},
+        )
+
+    assert result["status"] == expected_status
+    assert result["text"] == ""
+    assert result["fallback_used"] is False
+    browser.assert_called_once()
+    scrape.assert_not_called()
+    combined.assert_not_called()
+
+
+def test_read_webpage_invalid_call_error_still_raises_without_cloud_fallback(tmp_path):
+    config = make_config(tmp_path)
+    error = ValueError("browser read failed")
+    with (
+        mock.patch("mcp4chatgpt.tools.browser_search.read", side_effect=error) as browser,
+        mock.patch("mcp4chatgpt.tools.web_ops.scrape") as scrape,
+        mock.patch("mcp4chatgpt.tools.web_ops.combined_search") as combined,
+    ):
+        with pytest.raises(ValueError, match="browser read failed"):
             _read_webpage(
                 config,
                 {"url": "https://example.test/start", "max_chars": 12000},
@@ -111,7 +136,7 @@ def test_public_web_audit_records_web_channel_and_actual_backend(tmp_path):
         return_value={
             "url": "https://example.test/final",
             "title": "Example",
-            "text": "rendered",
+            "text": "rendered page body " * 12,
             "truncated": False,
         },
     ):
@@ -121,6 +146,8 @@ def test_public_web_audit_records_web_channel_and_actual_backend(tmp_path):
     assert event["tool"] == "read_webpage"
     assert event["channel"] == "web"
     assert event["backend"] == "browser"
+    assert event["read_status"] == "ok"
+    assert event["retrieval_ok"] is True
 
     with mock.patch(
         "mcp4chatgpt.tools.web_ops.combined_search",
@@ -143,7 +170,7 @@ def test_public_web_audit_records_web_channel_and_actual_backend(tmp_path):
     assert event["engine"] == "brave"
 
 
-def test_public_web_failure_audit_records_attempted_browser_without_fallback(tmp_path):
+def test_public_web_degraded_audit_records_structured_timeout(tmp_path):
     config = replace(make_config(tmp_path), tool_exposure="compact")
     registry = ToolRegistry(config, AuditLogger(config.audit_log))
 
@@ -151,11 +178,15 @@ def test_public_web_failure_audit_records_attempted_browser_without_fallback(tmp
         "mcp4chatgpt.tools.browser_search.read",
         side_effect=TimeoutError("browser read timed out"),
     ):
-        with pytest.raises(TimeoutError, match="browser read timed out"):
-            registry.call_tool("read_webpage", {"url": "https://example.test/start"})
+        result = registry.call_tool(
+            "read_webpage", {"url": "https://example.test/start"}
+        )
 
+    assert result["structuredContent"]["status"] == "timeout"
     event = json.loads(config.audit_log.read_text(encoding="utf-8").splitlines()[-1])
     assert event["tool"] == "read_webpage"
-    assert event["ok"] is False
+    assert event["ok"] is True
     assert event["channel"] == "web"
     assert event["backend"] == "browser"
+    assert event["read_status"] == "timeout"
+    assert event["retrieval_ok"] is False
