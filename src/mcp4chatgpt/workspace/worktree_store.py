@@ -160,5 +160,11 @@ class WorktreeStore:
                 continue
             if value is not None:
                 records.append(value)
-        records.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
+        records.sort(
+            key=lambda item: (
+                str(item.get("created_at", "")),
+                str(item.get("worktree_id", "")),
+            ),
+            reverse=True,
+        )
         return records
