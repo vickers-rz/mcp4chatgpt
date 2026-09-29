@@ -1,6 +1,6 @@
 # 基线固定、手工模型对照与事务基础设计
 
-日期：2026-09-28。状态：基线和本地测量完成；ChatGPT 手工配对评测待执行；事务契约已制定、尚未实现。
+日期：2026-09-28。状态：基线和本地测量完成；ChatGPT 手工配对评测进行中（15/18）；事务原型与严格文件工具接入已完成，Jobs 的事务接入仍待后续。
 
 ## 1. 本轮已完成
 
@@ -33,7 +33,7 @@
 - 记录实际客户端是否自动搜索或省略工具；服务端 full 不代表完整 schema 一定全部进入模型上下文。
 - 先运行已上线 compact 的试题验证流程，正式配对数据按上面的交替顺序开始。
 
-### 2.2 切换步骤（尚未执行）
+### 2.2 切换步骤（已执行；trial 3 compact 尚未完成）
 
 只有在其他任务没有使用正式实例的窗口中切换；切换涉及短暂重启，不能与其他对话部署同时进行。
 
@@ -72,6 +72,12 @@ MCP_FULL_TOOL_EXPOSURE=compact ./MCP4ChatGPT.command restart-full
 先按题型报告两组成功数、耗时中位数和范围、发现与修复次数。18 次小样本仅用于发现明显回归，不做显著性或全局成本优势结论。失败和客户端拦截均保留，不删除坏样本。
 
 进入下一阶段的门槛：正确性和完整性无可复现下降；能解释短任务的额外发现开销；实测是否值得扩大到 PDF/分页。只读 pilot 完成前，不根据本地聚合投影启动 Code Mode 实现。
+
+### 4.1 2026-09-29 收集进度
+
+当前真实 ChatGPT 记录位于 `benchmarks/runs/2026-09-29-chatgpt-manual.json`，已完成 **15/18** 个 fresh-chat 样本：full 9 个、compact 6 个。compact 当前 6/6 正确；full 当前 7/9 正确，两个错误均出现在 C 题，模型正确识别 `missing.json` 不存在，但把 `requested` / `completed` 返回成文件名数组而不是题目要求的计数。full trial 3 的 C 已从现有真实会话与服务端审计恢复，答案为正确的 `requested=3, completed=2`；由于当时未保留观察者发送/完成时间，只记录 UI 可见的 52 秒 thinking 指示和审计工具调用时间边界，不反推墙钟耗时。
+
+这只是未完成 pilot 的过程观察，不支持 full/compact 优劣结论。剩余 compact trial 3 的 A/B/C 必须继续使用三个独立新会话；当前 4GPT 连接在 exposure 切换尝试后不可用，因此没有用当前长上下文、旧会话或本地执行结果替代这三条样本。
 
 ## 5. 事务基础契约 v0.1
 
@@ -123,7 +129,7 @@ MCP_FULL_TOOL_EXPOSURE=compact ./MCP4ChatGPT.command restart-full
 
 ## 6. 下一批具体工作
 
-后续进展：独立操作记录层和进程崩溃测试已实现，见 [文档 30](30-operations-store-prototype-2026-09-28.md)。文件执行器与显式恢复核对随后已实现，见 [文档 31](31-file-operation-reconciliation-2026-09-28.md)；正式工具接入、Jobs 接入和手工 pilot 仍待开展。以下保留本轮结束时的计划。
+后续进展：独立操作记录层和进程崩溃测试已实现，见 [文档 30](30-operations-store-prototype-2026-09-28.md)。文件执行器与显式恢复核对随后已实现，见 [文档 31](31-file-operation-reconciliation-2026-09-28.md)，并已接入正式文件工具，见 [文档 39](39-strict-file-tool-integration-2026-09-29.md)；P5 HTTP downstream 见 [文档 40](40-p5-http-downstream-2026-09-29.md)。Jobs 事务接入仍待后续，手工 pilot 当前为 15/18。以下保留本轮结束时的计划。
 
 1. 审查 baseline 与当前 diff，建立保留未提交改动的可恢复开发基线。
 2. 实现独立 operations store 原型与状态迁移测试，不接生产流量。
