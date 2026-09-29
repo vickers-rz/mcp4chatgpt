@@ -47,6 +47,7 @@ from . import browser_search, skill_resources, web_archive, web_read_status
 from .mcp_types import RawMCPToolResult
 from .downstream.manager import DownstreamMCPManager
 from .operations import tool_api as operation_tool_api
+from .jobs import tool_api as job_tool_api
 
 
 ToolHandler = Callable[[Config, dict[str, Any]], Any]
@@ -562,7 +563,7 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
         ),
         Tool(
             "local_start_job",
-            "Start a durable local shell job exactly once for one operation_id and request fingerprint. Replaying the same operation_id with the same request returns the existing job without spawning again; a different request returns idempotency_conflict.",
+            "Start a durable local shell job once per authenticated principal, workspace and operation_id. Same scoped operation_id plus the same request replays the existing job; a different request returns idempotency_conflict. Legacy unscoped reservations are checked first to avoid duplicate execution during upgrades.",
             _schema(
                 {
                     "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -572,23 +573,32 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 },
                 ["operation_id", "command"],
             ),
-            lambda c, a: local_ops.start_job(
-                c,
-                a["operation_id"],
-                a["command"],
-                a.get("cwd"),
-                int(a.get("timeout_sec", 900)),
+            job_tool_api.start,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_job_operation_status",
+            "Resolve an existing durable local job by operation_id in the authenticated principal and workspace scope. Observation-only: never starts, retries, cancels or repairs a job. cwd selects the same workspace scope used by local_start_job.",
+            _schema(
+                {
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "cwd": {"type": "string"},
+                },
+                ["operation_id"],
             ),
+            job_tool_api.operation_status,
+            needs_client_id=True,
         ),
         Tool(
             "local_job_status",
-            "Observe durable local job state and process liveness. Observation-only: never starts, retries, cancels, or repairs a job.",
+            "Observe durable local job state and process liveness. New scoped jobs are principal-bound; legacy jobs retain historical compatibility. Observation-only: never starts, retries, cancels, or repairs a job.",
             _schema({"job_id": {"type": "string"}}, ["job_id"]),
-            lambda c, a: local_ops.job_status(c, a["job_id"]),
+            job_tool_api.status,
+            needs_client_id=True,
         ),
         Tool(
             "local_job_logs",
-            "Read retained stdout/stderr from explicit byte cursors. Observation-only and safe to replay.",
+            "Read retained stdout/stderr from explicit byte cursors. New scoped jobs are principal-bound. Observation-only and safe to replay.",
             _schema(
                 {
                     "job_id": {"type": "string"},
@@ -598,23 +608,19 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 },
                 ["job_id"],
             ),
-            lambda c, a: local_ops.job_logs(
-                c,
-                a["job_id"],
-                int(a.get("stdout_offset", 0)),
-                int(a.get("stderr_offset", 0)),
-                int(a.get("max_bytes", 16384)),
-            ),
+            job_tool_api.logs,
+            needs_client_id=True,
         ),
         Tool(
             "local_list_jobs",
-            "List durable local jobs from persisted metadata without starting or changing them.",
+            "List durable local jobs visible to the authenticated principal from persisted metadata without starting or changing them. Legacy jobs remain visible for compatibility.",
             _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}}),
-            lambda c, a: local_ops.list_jobs(c, int(a.get("limit", 50))),
+            job_tool_api.list_jobs,
+            needs_client_id=True,
         ),
         Tool(
             "local_cancel_job",
-            "Explicitly cancel one durable local job. Repeated cancellation of an already-terminal job is a no-op.",
+            "Explicitly cancel one durable local job. New scoped jobs are principal-bound. Repeated cancellation of an already-terminal job is a no-op.",
             _schema(
                 {
                     "job_id": {"type": "string"},
@@ -622,11 +628,8 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 },
                 ["job_id"],
             ),
-            lambda c, a: local_ops.cancel_job(
-                c,
-                a["job_id"],
-                float(a.get("grace_sec", 2)),
-            ),
+            job_tool_api.cancel,
+            needs_client_id=True,
         ),
         Tool(
             "local_run_command",

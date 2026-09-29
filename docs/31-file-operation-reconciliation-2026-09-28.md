@@ -91,6 +91,6 @@ SQLite hot-journal 恢复仍通过 `recover_database()` 在维护阶段显式执
 
 - 在生产接入前补齐工件保留/清理及扩展元数据支持边界，审查路径竞争窗口。
 - 设计文件工具的可选严格模式、操作状态与显式恢复接口、错误契约和能力声明。
-- Jobs 接入及 ChatGPT full/compact 手工 pilot 仍待开展。
+- Jobs 的 MCP scoped operation identity 已接入：新 Job 按 authenticated principal + workspace + operation_id 去重，并提供只读 operation lookup；旧 unscoped reservation 继续优先回放以避免升级期重复启动。ChatGPT full/compact 手工 pilot 当前为 15/18，仍缺 compact trial 3 的 A/B/C 三个 fresh-chat 样本。
 
-本轮未注册新 MCP 工具、迁移正式数据、重启服务或切换 exposure。
+原始 2026-09-28 文件执行器阶段未注册新 MCP 工具；后续 2026-09-29 已完成 strict file 工具与 scoped Job MCP 接入，并在 compact exposure 下重启正式服务验证 capability catalog。

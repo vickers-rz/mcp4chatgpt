@@ -195,6 +195,7 @@ Long work uses:
 
 ```text
 local_start_job
+local_job_operation_status
 local_job_status
 local_job_logs
 local_list_jobs
@@ -203,8 +204,17 @@ local_cancel_job
 
 ### 3.1 Idempotent start
 
-A job start carries a caller-supplied `operation_id`. The server fingerprints
-the canonical request:
+A job start carries a caller-supplied `operation_id`. At the MCP boundary,
+new reservations are scoped by the authenticated principal and the longest
+matching allowed workspace root. The per-install `local-jobs` store is the
+installation namespace; the internal reservation key hashes:
+
+```text
+principal + workspace + operation_id
+```
+
+The user-facing `operation_id` remains unchanged in job metadata. The server
+also fingerprints the canonical request:
 
 ```text
 command + cwd + timeout + shell
@@ -212,7 +222,7 @@ command + cwd + timeout + shell
 
 The operation record is durably reserved before a supervisor can be spawned.
 
-Replay rules:
+Replay rules inside one principal/workspace scope:
 
 ```text
 same operation_id + same fingerprint
@@ -223,8 +233,11 @@ same operation_id + different fingerprint
   -> idempotency_conflict
 ```
 
-This converts an uncertain outer tool delivery from an unsafe retry into an
-exact lookup.
+Different principals or workspaces may reuse the same public `operation_id`.
+During upgrades, a matching legacy unscoped reservation is checked and replayed
+before a new scoped reservation is created, so an old in-flight job is not
+duplicated. `local_job_operation_status(operation_id, cwd)` resolves the
+existing job without starting or repairing it.
 
 ### 3.2 Uncertain start crash window
 
