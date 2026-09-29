@@ -347,35 +347,87 @@ def worktree_status(
     worktree_id: str,
     *,
     expected_principal_hash: str | None = None,
+    expected_workspace_id: str | None = None,
+    strict_scope: bool = False,
 ) -> dict[str, Any]:
     store = _store(config)
     record = store.read_record(worktree_id)
-    if expected_principal_hash is not None:
-        rec_hash = record.get("scope", {}).get("principal_hash")
-        if rec_hash is not None and rec_hash != expected_principal_hash:
+    scope = record.get("scope")
+    if strict_scope:
+        if not isinstance(scope, dict):
             raise ValueError(f"worktree_not_found: {worktree_id}")
+        if expected_principal_hash is not None and scope.get("principal_hash") != expected_principal_hash:
+            raise ValueError(f"worktree_not_found: {worktree_id}")
+        if expected_workspace_id is not None and scope.get("workspace_id") != expected_workspace_id:
+            raise ValueError(f"worktree_not_found: {worktree_id}")
+    else:
+        if expected_principal_hash is not None:
+            rec_hash = scope.get("principal_hash") if isinstance(scope, dict) else None
+            if rec_hash is not None and rec_hash != expected_principal_hash:
+                raise ValueError(f"worktree_not_found: {worktree_id}")
+        if expected_workspace_id is not None:
+            rec_ws = scope.get("workspace_id") if isinstance(scope, dict) else None
+            if rec_ws is not None and rec_ws != expected_workspace_id:
+                raise ValueError(f"worktree_not_found: {worktree_id}")
     return _observed_record(record)
 
 
 def list_worktrees(
     config: Config,
     limit: int = 50,
+    cursor: str | None = None,
     *,
     expected_principal_hash: str | None = None,
+    expected_workspace_id: str | None = None,
+    strict_scope: bool = False,
 ) -> dict[str, Any]:
     limit = max(1, min(int(limit), 200))
     store = _store(config)
     records = store.list_records()
-    if expected_principal_hash is not None:
-        records = [
-            r for r in records
-            if r.get("scope", {}).get("principal_hash") in (None, expected_principal_hash)
-        ]
+
+    filtered: list[dict[str, Any]] = []
+    for r in records:
+        scope = r.get("scope")
+        if strict_scope:
+            if not isinstance(scope, dict):
+                continue
+            if expected_principal_hash is not None and scope.get("principal_hash") != expected_principal_hash:
+                continue
+            if expected_workspace_id is not None and scope.get("workspace_id") != expected_workspace_id:
+                continue
+        else:
+            if expected_principal_hash is not None:
+                rec_hash = scope.get("principal_hash") if isinstance(scope, dict) else None
+                if rec_hash not in (None, expected_principal_hash):
+                    continue
+            if expected_workspace_id is not None:
+                rec_ws = scope.get("workspace_id") if isinstance(scope, dict) else None
+                if rec_ws not in (None, expected_workspace_id):
+                    continue
+        filtered.append(r)
+
+    start_idx = 0
+    if cursor is not None:
+        cursor_str = str(cursor).strip()
+        if cursor_str:
+            for idx, r in enumerate(filtered):
+                if str(r.get("worktree_id")) == cursor_str:
+                    start_idx = idx + 1
+                    break
+            else:
+                raise ValueError(f"invalid_cursor: {cursor_str}")
+
+    page = filtered[start_idx : start_idx + limit]
+    has_more = (start_idx + limit) < len(filtered)
+    next_cursor = page[-1]["worktree_id"] if (has_more and page) else None
+
     return {
         "worktrees": [
             _observed_record(record)
-            for record in records[:limit]
-        ]
+            for record in page
+        ],
+        "next_cursor": next_cursor,
+        "has_more": has_more,
     }
 
 
@@ -384,6 +436,8 @@ def remove_worktree(
     worktree_id: str,
     *,
     expected_principal_hash: str | None = None,
+    expected_workspace_id: str | None = None,
+    strict_scope: bool = False,
 ) -> dict[str, Any]:
     """Remove one clean managed worktree; replay after removal is a no-op."""
 
@@ -391,10 +445,23 @@ def remove_worktree(
     worktree_id = store.validate_worktree_id(worktree_id)
     with store.worktree_lock(worktree_id):
         record = store.read_record(worktree_id)
-        if expected_principal_hash is not None:
-            rec_hash = record.get("scope", {}).get("principal_hash")
-            if rec_hash is not None and rec_hash != expected_principal_hash:
+        scope = record.get("scope")
+        if strict_scope:
+            if not isinstance(scope, dict):
                 raise ValueError(f"worktree_not_found: {worktree_id}")
+            if expected_principal_hash is not None and scope.get("principal_hash") != expected_principal_hash:
+                raise ValueError(f"worktree_not_found: {worktree_id}")
+            if expected_workspace_id is not None and scope.get("workspace_id") != expected_workspace_id:
+                raise ValueError(f"worktree_not_found: {worktree_id}")
+        else:
+            if expected_principal_hash is not None:
+                rec_hash = scope.get("principal_hash") if isinstance(scope, dict) else None
+                if rec_hash is not None and rec_hash != expected_principal_hash:
+                    raise ValueError(f"worktree_not_found: {worktree_id}")
+            if expected_workspace_id is not None:
+                rec_ws = scope.get("workspace_id") if isinstance(scope, dict) else None
+                if rec_ws is not None and rec_ws != expected_workspace_id:
+                    raise ValueError(f"worktree_not_found: {worktree_id}")
 
         if record.get("state") == "removed":
             return {
@@ -409,6 +476,7 @@ def remove_worktree(
             )
 
         repo = Path(str(record["source_repo"])).resolve()
+        resolve_allowed_path(str(repo), config.allowed_roots, must_exist=True)
         destination = Path(str(record["path"])).resolve()
         entries = _worktree_entries(repo)
         entry = entries.get(destination)

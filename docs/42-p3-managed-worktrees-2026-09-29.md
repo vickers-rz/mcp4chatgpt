@@ -36,44 +36,49 @@ The following four tools are registered in `build_tools()` and discoverable unde
 ### `local_worktree_create`
 - Arguments: `operation_id` (string), `cwd` (string), `base_ref` (string, default `"HEAD"`).
 - Creates an isolated managed worktree under `<repo.parent>/.mcp4chatgpt-worktrees/<repo>-<hash>/wt_<uuid>`.
+- Scopes the worktree to the canonical Git repository root identity `workspace_id = sha256(canonical_repo_root)`.
 - Returns `worktree_id`, `path`, `source_repo`, `base_commit`, `state`, `created`, `replayed`.
 
 ### `local_worktree_status`
-- Arguments: `worktree_id` (`wt_[a-f0-9]{24}`).
+- Arguments: `worktree_id` (`wt_[a-f0-9]{24}`), optional `cwd` (string).
 - Inspects live git status: returns `worktree_id`, `registered`, `exists`, `dirty`, `actual_head`, `base_matches`, `state`.
+- If `cwd` is supplied, verifies that the caller has authority over the repository matching the worktree's `workspace_id`.
 
 ### `local_worktree_list`
-- Arguments: `limit` (integer, default 50).
-- Bounded top-N listing: returns up to `limit` active and historical worktrees scoped to the authenticated principal (note: no cursor/offset pagination protocol in v1).
+- Arguments: `limit` (integer, default 50), optional `cursor` (string), optional `cwd` (string).
+- Cursor pagination: ordered by `(created_at, worktree_id)` descending. Returns `worktrees`, `next_cursor` (opaque token for the next page), and `has_more` (boolean).
+- If `cwd` is supplied, filters worktrees belonging to the specific repository/workspace.
 
 ### `local_worktree_remove`
-- Arguments: `worktree_id` (`wt_[a-f0-9]{24}`).
+- Arguments: `worktree_id` (`wt_[a-f0-9]{24}`), optional `cwd` (string).
 - Verifies the worktree has no uncommitted changes, removes the worktree via `git worktree remove`, and marks the record state as `removed`. Replay is a safe no-op.
+- If `cwd` is supplied, verifies workspace repository authority before removal.
 
 ## 3. Scoping and multi-principal isolation
 
 Worktrees are scoped by:
 - Authenticated principal: `principal_hash = sha256(client_id)`
-- Workspace: `workspace_id = sha256(canonical_workspace_path)`
+- Workspace: `workspace_id = sha256(canonical_git_repository_root)`
 - Scoped reservation ID: `scoped_v1_<sha256(principal_hash + workspace_id + operation_id)>`
 
 Isolation rules:
-- **Principal-scoped access**: Principal A cannot view, inspect, or delete scoped worktrees created by Principal B (`worktree_not_found`). Note that while reservation IDs incorporate `workspace_id` to guarantee idempotent reservations per workspace, `status`, `list`, and `remove` check authorization at the `principal_hash` boundary.
-- **Shared operation_id safety**: Different principals can safely reuse the same public `operation_id` without collision.
-- **Legacy record fallback**: For backwards compatibility with un-scoped legacy records, records without a recorded `principal_hash` (or where `scope` is omitted) bypass the principal mismatch rejection. Strict isolation applies to all newly created scoped worktrees.
-- `local_worktree_list` only returns worktrees belonging to the calling principal (plus legacy unscoped records).
+- **Repo-level workspace identity**: `workspace_id` is rooted at the canonical Git repository root (`git rev-parse --show-toplevel`), preventing scope collision between multiple repositories under the same allowed root.
+- **Principal-scoped access**: Principal A cannot view, inspect, or delete scoped worktrees created by Principal B (`worktree_not_found`).
+- **Explicit workspace verification**: Passing `cwd` to `status`, `list`, or `remove` strictly validates that the target worktree belongs to the caller's asserted workspace.
+- **Zero-trust legacy isolation**: The authenticated MCP API (`worktree_tool_api`) strictly enforces valid scope presence (`strict_scope=True`). Unscoped/legacy records are never leaked or operable over the MCP interface; only low-level internal functions retain access for administrative migration/maintenance.
+- **Deterministic cursor pagination**: `local_worktree_list` provides stable pagination via `(created_at, worktree_id)` sort keys and `cursor`/`next_cursor`.
 
 ## 4. Test evidence
 
 New focused test suites:
 - `tests/test_workspace_worktrees.py`: 6 passed
   - ID validation, create, status, clean/dirty detection, CAS replay, conflict detection, dirty source rejection, clean vs dirty removal, concurrent worktree isolation.
-- `tests/test_worktree_tool_api.py`: 3 passed
-  - Scoped worktree replay, principal isolation, shared operation_id reuse, ToolRegistry call_tool integration, and capability search/get discovery.
+- `tests/test_worktree_tool_api.py`: 7 passed
+  - Scoped worktree replay, principal isolation, shared operation_id reuse, ToolRegistry call_tool integration, capability search/get discovery, repo-root workspace scoping across projects, `cwd` workspace authorization & filtering, legacy unscoped record isolation, and deterministic cursor pagination contract.
 
 Complete repository regression:
 ```text
 uv run pytest -q
-435 passed, 11 skipped, 5 warnings in 40.59s
+439 passed, 11 skipped, 5 warnings in 41.28s
 ```
 Zero failures.

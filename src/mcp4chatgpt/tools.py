@@ -654,7 +654,10 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
             "local_worktree_status",
             "Inspect the live status of one managed Git worktree by its worktree_id, including registered status, clean/dirty state, and HEAD commit.",
             _schema(
-                {"worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"}},
+                {
+                    "worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"},
+                    "cwd": {"type": "string", "description": "Optional repository path to verify workspace authorization."},
+                },
                 ["worktree_id"],
             ),
             worktree_tool_api.status,
@@ -662,9 +665,13 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
         ),
         Tool(
             "local_worktree_list",
-            "List managed Git worktrees accessible to the current authenticated principal.",
+            "List managed Git worktrees accessible to the current authenticated principal with stable cursor pagination and optional repository scoping.",
             _schema(
-                {"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}},
+                {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                    "cursor": {"type": "string", "description": "Opaque cursor (worktree_id) from previous response next_cursor for pagination."},
+                    "cwd": {"type": "string", "description": "Optional repository path to filter worktrees belonging to a specific workspace."},
+                },
             ),
             worktree_tool_api.list_worktrees,
             needs_client_id=True,
@@ -673,7 +680,10 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
             "local_worktree_remove",
             "Remove one clean managed Git worktree by its worktree_id. Rejects removal if worktree is dirty. Replay after removal is a no-op.",
             _schema(
-                {"worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"}},
+                {
+                    "worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"},
+                    "cwd": {"type": "string", "description": "Optional repository path to verify workspace authorization."},
+                },
                 ["worktree_id"],
             ),
             worktree_tool_api.remove,
