@@ -526,7 +526,7 @@ class TestDownstreamMCPManager:
 
     def test_unsupported_transport_is_failed_not_fatal(self, tmp_path):
         config_dir = _make_toml(tmp_path, {
-            "future_http": {"enabled": True, "transport": "http", "command": "unused"},
+            "future_transport": {"enabled": True, "transport": "ftp", "command": "unused"},
         })
         manager = DownstreamMCPManager()
         manager.start_all(config_dir)

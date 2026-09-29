@@ -76,6 +76,8 @@ def _parse_downstream_entry(
         name=str(entry.get("name", ds_id)),
         enabled=bool(entry.get("enabled", True)),
         transport=str(entry.get("transport", "stdio")),
+        url=str(entry.get("url", "")),
+        bearer_token_env=str(entry.get("bearer_token_env", "")),
         command=str(entry.get("command", "")),
         args=[str(a) for a in entry.get("args", [])],
         cwd=str(entry.get("cwd", "")),
@@ -84,6 +86,7 @@ def _parse_downstream_entry(
         call_timeout=float(entry.get("call_timeout", 60.0)),
         allow_tools=allow,
         deny_tools=deny,
+        allow_capability_targets=[str(t) for t in entry.get("allow_capability_targets", [])],
         namespace=str(entry.get("namespace", ds_id)),
     )
 

@@ -18,6 +18,7 @@ import os
 import platform
 import threading
 import time
+import uuid
 from copy import deepcopy
 from referencing import Registry
 from referencing.exceptions import NoSuchResource
@@ -45,6 +46,7 @@ from . import chrome_ops, computer_ops, ext_ops, file_resources, knowledge_ops, 
 from . import browser_search, skill_resources, web_archive, web_read_status
 from .mcp_types import RawMCPToolResult
 from .downstream.manager import DownstreamMCPManager
+from .operations import tool_api as operation_tool_api
 
 
 ToolHandler = Callable[[Config, dict[str, Any]], Any]
@@ -118,6 +120,7 @@ class Tool:
     backend_id: str | None = None
     backend_instance_id: str | None = None
     original_name: str | None = None
+    needs_client_id: bool = False
 
     def definition(self, *, auth_required: bool = True) -> dict[str, Any]:
         security_schemes = [{"type": "oauth2", "scopes": ["local", "web", "knowledge"]}]
@@ -167,7 +170,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "pdf_redact_text", "pdf_insert_text",
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_request_permissions", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
-        "local_apply_patch",
+        "local_apply_patch", "local_strict_write_file", "local_strict_apply_patch",
         "local_run_command",
         "local_start_job",
         "local_cancel_job",
@@ -240,7 +243,9 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_start_js_job",
         "ext_cancel_job",
     }
-    protocol_idempotent = name in {"local_start_job", "local_cancel_job"}
+    protocol_idempotent = name in {"local_start_job", "local_cancel_job",
+                                   "local_strict_write_file", "local_strict_apply_patch",
+                                   "local_operation_reconcile"}
     return {
         "readOnlyHint": name not in mutating,
         "destructiveHint": destructive,
@@ -520,6 +525,39 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 a["new"],
                 a.get("expected_sha256"),
             ),
+        ),
+        Tool(
+            "local_strict_write_file",
+            "Replace an existing ordinary UTF-8 file with a durable operation_id. Requires a complete local_read_text proof and expected_sha256. Same operation_id and same request returns the stored result; uncertain effects require explicit reconciliation. Rejects unsupported file metadata and types.",
+            _schema({"operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "path": {"type": "string"}, "content": {"type": "string"},
+                     "expected_sha256": {"type": "string"}, "full_replace_token": {"type": "string"},
+                     "allow_large_reduction": {"type": "boolean", "default": False}},
+                    ["operation_id", "path", "content", "expected_sha256", "full_replace_token"]),
+            operation_tool_api.write, needs_client_id=True,
+        ),
+        Tool(
+            "local_strict_apply_patch",
+            "Replace the first exact text anchor in an existing ordinary UTF-8 file with durable operation_id and expected_sha256. Replay returns the stored result without applying again.",
+            _schema({"operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "path": {"type": "string"}, "old": {"type": "string"},
+                     "new": {"type": "string"}, "expected_sha256": {"type": "string"}},
+                    ["operation_id", "path", "old", "new", "expected_sha256"]),
+            operation_tool_api.patch, needs_client_id=True,
+        ),
+        Tool(
+            "local_operation_status",
+            "Read the durable state of one strict file operation by its original path and operation_id. Does not retry or reconcile it.",
+            _schema({"operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "path": {"type": "string"}}, ["operation_id", "path"]),
+            operation_tool_api.status, needs_client_id=True,
+        ),
+        Tool(
+            "local_operation_reconcile",
+            "Explicitly compare durable evidence with the target of one strict file operation. Never replays or modifies the target. Use after an uncertain result or process crash.",
+            _schema({"operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "path": {"type": "string"}}, ["operation_id", "path"]),
+            operation_tool_api.reconcile, needs_client_id=True,
         ),
         Tool(
             "local_start_job",
@@ -1033,6 +1071,7 @@ class ToolRegistry:
         self.config = config
         self.audit = audit
         self._downstream_manager = downstream_manager
+        self.server_instance_id = uuid.uuid4().hex
         self._catalog_lock = threading.RLock()
         listed_tools = build_tools(computer_mode=getattr(config, "computer_mode", "off"))
         if _ext_async_jobs_enabled():
@@ -1681,7 +1720,8 @@ class ToolRegistry:
             # Each subsystem returns native structured data; _ok wraps it in
             # MCP text content while preserving structuredContent for clients
             # that can use it.
-            result = tool.handler(self.config, arguments or {})
+            result = (tool.handler(self.config, arguments or {}, client_id)
+                      if tool.needs_client_id else tool.handler(self.config, arguments or {}))
             audit_fields = self._web_audit_fields(name, arguments, result)
             audit_ok = not (isinstance(result, RawMCPToolResult) and result.value.get("isError") is True)
             if name.startswith("computer_"):
@@ -1700,7 +1740,8 @@ class ToolRegistry:
                         "listed_count": len(self._all_listed_names),
                         "catalog_version": self.catalog_version,
                     }
-                result = {**result, "tool_catalog": tool_catalog}
+                result = {**result, "server_instance_id": self.server_instance_id,
+                          "tool_catalog": tool_catalog}
             self.audit.log("tool_call", tool=name, client_id=client_id, ok=audit_ok, channel=channel,
                            run_id=context.run_id, entrypoint=context.entrypoint, catalog_version=catalog_version,
                            capability_revision=capability_revision,

@@ -36,6 +36,7 @@ _loop: asyncio.AbstractEventLoop | None = None
 _websocket: Any | None = None          # active websocket connection
 _pending: dict[str, asyncio.Future[Any]] = {}  # id → Future
 _connected_at: float | None = None
+_connection_generation: str | None = None
 _client_info: dict[str, Any] = {}
 _bridge_token: str = ""
 _bridge_lock = threading.Lock()
@@ -65,7 +66,7 @@ def _verify_token(token: str) -> bool:
 # ---------------------------------------------------------------------------
 
 async def _handler(websocket: Any) -> None:
-    global _websocket, _connected_at, _client_info
+    global _websocket, _connected_at, _connection_generation, _client_info
 
     # --- Handshake: first message must be {"type":"auth","token":"..."} -----
     try:
@@ -92,6 +93,7 @@ async def _handler(websocket: Any) -> None:
     with _bridge_lock:
         _websocket = websocket
         _connected_at = time.time()
+        _connection_generation = uuid.uuid4().hex
         _client_info = {
             "version": str(msg.get("version", "")),
             "platform": str(msg.get("platform", "")),
@@ -139,6 +141,7 @@ async def _handler(websocket: Any) -> None:
             if _websocket is websocket:
                 _websocket = None
                 _connected_at = None
+                _connection_generation = None
         # Cancel all pending futures
         for fut in list(_pending.values()):
             if not fut.done():
@@ -171,6 +174,7 @@ def connection_info() -> dict[str, Any]:
         return {
             "connected": True,
             "connected_at": _connected_at,
+            "connection_generation": _connection_generation,
             "uptime_sec": round(time.time() - (_connected_at or time.time()), 1),
             **_client_info,
         }

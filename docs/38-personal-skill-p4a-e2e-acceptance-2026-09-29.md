@@ -109,3 +109,12 @@ Prompt：`请做一次无破坏性的 4GPT 本机 Chrome tab-handle 验收，目
 - 新增的 `scripts/p4a_e2e_fixture.py` 只提供本机合成 HTML 页面和合成 Cookie；没有更改 production Skill contract、MCP protocol、Web route 或分类阈值。ChatGPT 中的 Skill 配置已同步，仓库源文件未变。
 - 验收结束后关闭了本轮创建的三个测试标签页，通过 fixture `/clear` 清除了本轮合成 Cookie，并停止了 fixture HTTP 服务；没有触碰真实网站登录态。
 - 本轮没有 production 代码修复；因此无需相关 regression test。没有推送或合并。
+
+## 2026-09-29 后续修正
+
+针对 `ext_read_page` 猜测，个人 Skill 源文件和服务端 Skill 资源都增加了具体的
+`capability_search` → `capability_get` → `capability_call` 规则：只能调用发现返回的
+名称，后续核对若需要另一能力须重新发现；发现不到就停止并报告限制。已在 ChatGPT
+个人 Skill 编辑器保存并重新读取，界面显示“技能已保存”且正文包含新规则。
+仓库同步测试覆盖两份 Skill 规则。此处记录的是指令更新，不把它等同于新的模型
+行为回归通过；仍需独立新会话复测同类场景。

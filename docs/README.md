@@ -2,6 +2,9 @@
 
 ## Current implementation and operation
 
+- [P5 HTTP downstream, 2026-09-29](40-p5-http-downstream-2026-09-29.md): reuse an existing `/mcp` through an allowlisted HTTP client, preserve MCP results, and enforce nested capability targets.
+- [Strict file operation MCP integration, 2026-09-29](39-strict-file-tool-integration-2026-09-29.md): registered strict write/patch/status/reconcile tools, identity and metadata limits, and rollout gates.
+
 - [ChatGPT personal Skill installation, 2026-09-29](36-chatgpt-personal-skill-2026-09-29.md): ready-to-copy `local-web-access` Skill, MCP dependency, installation without public-submission developer identity verification, and real-chat verification.
 - [Architecture and logic](05-architecture-and-logic.md): runtime topology, request flow, configuration, and deployment.
 - [Personal full-access implementation and acceptance](26-personal-full-access-plan.md): implemented personal full-access profile covering co-te, shell/rm, raw response output, and full Computer Use while retaining authentication, audit, workspace transactions, durable-job semantics, and capability/backend identity checks.
@@ -13,6 +16,8 @@
 - [Persistent headless Chrome](12-persistent-headless-chrome.md): browser session design and operation.
 
 ## Reviews and acceptance
+
+- [Personal Skill P4A E2E acceptance, 2026-09-29](38-personal-skill-p4a-e2e-acceptance-2026-09-29.md): real ChatGPT browser routing, status, tab-handle results, and remaining reliability boundary.
 
 - [MCP local-web-access Skill supply (P3), 2026-09-28](35-mcp-local-web-skill-2026-09-28.md): advertises the Skills extension, serves `skills/list` / `skills/get` / `skill://` resources with verified SHA-256 manifests, and records 400-pass Python-suite acceptance.
 - [Local Web read-result classification (P2), 2026-09-28](34-web-read-result-classification-2026-09-28.md): seven-state `read_webpage` result contract, observable evidence, conservative blocker classification, structured timeout/unavailable handling, and 389-pass Python-suite acceptance.

@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+import time
 from typing import Any, Iterator
 
 
@@ -180,7 +181,8 @@ class OperationStore:
                 return {**record, "replayed": True}
             record = dict(operation_id=key.operation_id, state="accepted", effect="none",
                           replayed=False, retry_policy="query_existing", evidence_refs=[],
-                          recovery_action=None, revision=0, result=None)
+                          recovery_action=None, revision=0, result=None,
+                          created_at=time.time(), updated_at=time.time())
             db.execute("INSERT INTO operations VALUES (?, ?, ?, ?)",
                        (identity, kind, fingerprint, canonical_json(record)))
             self._event(db, identity, record)
@@ -219,8 +221,15 @@ class OperationStore:
                 raise ValueError("compensation_requires_evidence")
             record.update(state=state, effect=effect, evidence_refs=evidence_refs,
                           recovery_action=recovery_action, result=result,
-                          revision=expected_revision + 1)
+                          revision=expected_revision + 1, updated_at=time.time())
             db.execute("UPDATE operations SET record=? WHERE key=?", (canonical_json(record), identity))
             self._event(db, identity, record)
             db.commit()
             return record
+
+    def file_operations(self) -> list[tuple[OperationKey, dict]]:
+        """Read-only inventory for operator maintenance; includes old records."""
+        with self._connection() as db:
+            return [(OperationKey(*json.loads(key)), json.loads(record))
+                    for key, record in db.execute(
+                        "SELECT key, record FROM operations WHERE kind LIKE 'strict_file.%'")]

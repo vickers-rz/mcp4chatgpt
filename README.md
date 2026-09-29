@@ -58,6 +58,17 @@ For the full architecture, request flow, data model, and deployment logic, read
 For an index that separates current implementation guidance, historical plans,
 handoffs, and review/acceptance records, read `docs/README.md`.
 
+## Recoverable file operations
+
+For existing ordinary UTF-8 files, `local_strict_write_file` and
+`local_strict_apply_patch` add a durable `operation_id` to the existing
+`local_read_text` version check. Retry a lost response with the same ID and
+identical arguments, then use `local_operation_status` or the explicit
+`local_operation_reconcile` if the result is uncertain. These tools are
+discoverable in compact exposure. The existing file tools retain their current
+contract. Scope, metadata limits, retention and rollout details are in
+`docs/39-strict-file-tool-integration-2026-09-29.md`.
+
 ## Local Controller
 
 The default local workflow is visible and manual, not a login background item.

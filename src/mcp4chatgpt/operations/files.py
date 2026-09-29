@@ -1,4 +1,4 @@
-"""Experimental strict text executor, deliberately not registered as an MCP tool.
+"""Strict text executor with durable evidence and explicit reconciliation.
 
 Only existing, singly-linked ordinary files in one workspace are supported.
 A process holds operation and shared workspace file locks throughout execution.
@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import stat
+import subprocess
 from typing import Iterator
 import uuid
 
@@ -22,6 +23,18 @@ from ..workspace import recovery, transactions, validators, versioning
 
 _MAX_BYTES = 16 * 1024 * 1024
 _ACTIVE = {"prepared", "running", "verifying", "needs_reconciliation"}
+
+
+def _has_extended_attributes(path: Path) -> bool:
+    if hasattr(os, "listxattr"):
+        names = os.listxattr(path, follow_symlinks=False)
+        return any(name != "com.apple.provenance" for name in names)
+    # Python on macOS does not expose listxattr; xattr lists names only here.
+    result = subprocess.run(["/usr/bin/xattr", str(path)], capture_output=True, text=True,
+                            timeout=5, check=False)
+    if result.returncode != 0:
+        raise ValueError("extended_attributes_check_failed")
+    return any(name != "com.apple.provenance" for name in result.stdout.splitlines())
 
 
 def _identity(value: os.stat_result) -> dict:
@@ -55,10 +68,12 @@ def _snapshot(parent_fd: int, name: str) -> tuple[bytes, dict]:
 
 
 class FileExecutor:
-    def __init__(self, store: OperationStore, *, state_dir: Path, workspace: Path):
+    def __init__(self, store: OperationStore, *, state_dir: Path, workspace: Path,
+                 token_dir: Path | None = None):
         self.store = store
         self.state_dir = Path(state_dir).resolve()
         self.workspace = Path(workspace).resolve(strict=True)
+        self.token_dir = Path(token_dir).resolve() if token_dir is not None else self.state_dir
         if store.path.resolve().parent != self.state_dir:
             raise ValueError("store_must_live_in_shared_state_directory")
 
@@ -175,10 +190,13 @@ class FileExecutor:
         before, before_info = _snapshot(parent, path.name)
         if before_info["uid"] != os.geteuid() or before_info["mode"] & 0o7000:
             raise ValueError("unsupported_ownership_or_special_mode")
+        # os.replace creates a new inode. Reject metadata we do not preserve.
+        if _has_extended_attributes(path):
+            raise ValueError("unsupported_extended_attributes")
         transactions.assert_expected_sha(current_sha256=before_info["sha256"],
                                          expected_sha256=expected_sha256)
         if kind == "write":
-            token_key = versioning.load_or_create_key(self.state_dir)
+            token_key = versioning.load_or_create_key(self.token_dir)
             if not versioning.verify_full_replace_token(
                 token_key, parameters["full_replace_token"], target=path,
                 sha256=before_info["sha256"], size=len(before),
@@ -235,6 +253,8 @@ class FileExecutor:
                     raise ValueError("parent_identity_changed")
             if _snapshot(parent, path.name)[1] != before_info:
                 raise ValueError("target_changed_before_replace")
+            if _has_extended_attributes(path):
+                raise ValueError("target_metadata_changed_before_replace")
             if _snapshot(parent, staged_name)[1] != staged_info:
                 raise ValueError("staged_candidate_changed")
             os.replace(staged_name, path.name, src_dir_fd=parent, dst_dir_fd=parent)
