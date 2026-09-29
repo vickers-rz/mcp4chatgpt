@@ -77,7 +77,7 @@ MCP_FULL_TOOL_EXPOSURE=compact ./MCP4ChatGPT.command restart-full
 
 当前真实 ChatGPT 记录位于 `benchmarks/runs/2026-09-29-chatgpt-manual.json`，已完成 **15/18** 个 fresh-chat 样本：full 9 个、compact 6 个。compact 当前 6/6 正确；full 当前 7/9 正确，两个错误均出现在 C 题，模型正确识别 `missing.json` 不存在，但把 `requested` / `completed` 返回成文件名数组而不是题目要求的计数。full trial 3 的 C 已从现有真实会话与服务端审计恢复，答案为正确的 `requested=3, completed=2`；由于当时未保留观察者发送/完成时间，只记录 UI 可见的 52 秒 thinking 指示和审计工具调用时间边界，不反推墙钟耗时。
 
-这只是未完成 pilot 的过程观察，不支持 full/compact 优劣结论。剩余 compact trial 3 的 A/B/C 必须继续使用三个独立新会话；当前 4GPT 连接在 exposure 切换尝试后不可用，因此没有用当前长上下文、旧会话或本地执行结果替代这三条样本。
+这只是未完成 pilot 的过程观察，不支持 full/compact 优劣结论。剩余 compact trial 3 的 A/B/C 必须继续使用三个独立新会话。exposure 切换尝试曾使 4GPT 连接短暂不可用，后续审计已再次出现成功的 MCP/4GPT 调用，说明服务随后恢复；但当前接手用的 CodexPro connector 实际仍报告 `bashMode=safe`，其 WebCodex Job start 也明确拒绝服务控制，因此本轮没有从该控制面再次切 exposure，也没有用当前长上下文、旧会话或本地执行结果替代剩余三条样本。
 
 ## 5. 事务基础契约 v0.1
 
