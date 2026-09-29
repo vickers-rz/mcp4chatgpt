@@ -1,8 +1,11 @@
-# P3 Managed Git Worktrees MCP Integration
+# Roadmap P3a: Managed Git Worktrees MCP Integration (Gap G6)
 
 Date: 2026-09-29. This records the implementation, principal-scoped integration,
 and automated verification of managed Git worktrees for isolated concurrent
-coding sessions, fulfilling Transaction Roadmap P3 (Gap G6 in document 28).
+coding sessions. This completes **Roadmap Phase P3a: Managed Worktree Infrastructure**
+(addressing Gap G6 from Document 28). The full end-to-end task validation,
+CAS publication (`refs/mcp4chatgpt/tasks/...`), and integration workflow remain
+planned under **Phase P3b: Validated Coding Task Pipeline**.
 
 ## 1. Motivation and isolation boundary
 
@@ -41,7 +44,7 @@ The following four tools are registered in `build_tools()` and discoverable unde
 
 ### `local_worktree_list`
 - Arguments: `limit` (integer, default 50).
-- Lists all active and historical worktrees scoped to the authenticated principal.
+- Bounded top-N listing: returns up to `limit` active and historical worktrees scoped to the authenticated principal (note: no cursor/offset pagination protocol in v1).
 
 ### `local_worktree_remove`
 - Arguments: `worktree_id` (`wt_[a-f0-9]{24}`).
@@ -55,9 +58,10 @@ Worktrees are scoped by:
 - Scoped reservation ID: `scoped_v1_<sha256(principal_hash + workspace_id + operation_id)>`
 
 Isolation rules:
-- Principal A cannot view, inspect, or delete worktrees created by Principal B (`worktree_not_found`).
-- Different principals can safely reuse the same public `operation_id` without collision.
-- `local_worktree_list` only returns worktrees belonging to the calling principal.
+- **Principal-scoped access**: Principal A cannot view, inspect, or delete scoped worktrees created by Principal B (`worktree_not_found`). Note that while reservation IDs incorporate `workspace_id` to guarantee idempotent reservations per workspace, `status`, `list`, and `remove` check authorization at the `principal_hash` boundary.
+- **Shared operation_id safety**: Different principals can safely reuse the same public `operation_id` without collision.
+- **Legacy record fallback**: For backwards compatibility with un-scoped legacy records, records without a recorded `principal_hash` (or where `scope` is omitted) bypass the principal mismatch rejection. Strict isolation applies to all newly created scoped worktrees.
+- `local_worktree_list` only returns worktrees belonging to the calling principal (plus legacy unscoped records).
 
 ## 4. Test evidence
 
