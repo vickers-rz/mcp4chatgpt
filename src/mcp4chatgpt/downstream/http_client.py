@@ -69,6 +69,10 @@ class HttpMCPClient:
         return self._transport_error
 
     @property
+    def catalog_error(self) -> None:
+        return None
+
+    @property
     def is_running(self) -> bool:
         return self._running
 

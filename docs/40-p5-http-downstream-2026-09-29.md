@@ -42,5 +42,9 @@ manufacture it. Server restarts change `server_instance_id` even when tool
 definitions are identical; an isolated restart test covers this case.
 
 An isolated two-server test covers HTTP discovery, namespaced calls, raw result
-preservation, catalog binding and denial of a nested shell target. This has not
-yet been rolled out to an external consumer or the live public instance.
+preservation, catalog binding, remote restart and denial of a nested shell
+target. A separate temporary consumer process connected to the live public
+instance over loopback with a short-lived bearer, called namespaced
+`server_info` and `ext_connection_status`, and observed the connection
+generation. No persistent downstream config was added to the live instance;
+an external consumer deployment remains to be arranged.

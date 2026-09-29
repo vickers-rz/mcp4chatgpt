@@ -40,6 +40,7 @@ allow_capability_targets = ["local_read_text", "local_expose_file"]
         manager = DownstreamMCPManager()
         manager.start_all(cfg.parent)
         try:
+            assert manager.get_status()["downstream"][0]["state"] == "running"
             assert {tool.original_name for tool in manager.get_tools()} == {
                 "server_info", "capability_call"}
             result = manager.call_tool("remote__capability_call", {
