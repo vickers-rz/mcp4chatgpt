@@ -14,7 +14,7 @@ url = "https://mcp.example.com/mcp"
 bearer_token_env = "MCP4CHATGPT_DOWNSTREAM_TOKEN"
 namespace = "local_browser"
 allow_tools = ["search_web", "read_webpage", "capability_search", "capability_get", "capability_call"]
-allow_capability_targets = ["ext_list_tabs", "ext_get_dom", "ext_navigate", "ext_fill_input"]
+allow_capability_targets = ["ext_list_tabs", "ext_get_dom", "ext_get_element_state", "ext_navigate", "ext_fill_input"]
 ```
 
 The token is read from the named environment variable, never stored in TOML.

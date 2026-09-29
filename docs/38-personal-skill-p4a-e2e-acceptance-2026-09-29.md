@@ -118,3 +118,19 @@ Prompt：`请做一次无破坏性的 4GPT 本机 Chrome tab-handle 验收，目
 个人 Skill 编辑器保存并重新读取，界面显示“技能已保存”且正文包含新规则。
 仓库同步测试覆盖两份 Skill 规则。此处记录的是指令更新，不把它等同于新的模型
 行为回归通过；仍需独立新会话复测同类场景。
+
+## 2026-09-29 新会话行为回归
+
+充值后在 ChatGPT **Chat** 模式中新建[显式 `local web access` 会话](https://chatgpt.com/c/6abb572b-efec-83ea-8843-777e3e636591)，要求对合成 `/form` 页面新开标签、填入 `P4A_SKILL_REGRESSION_20260929` 且不提交，然后核对实时输入值。发送前界面保留 Skill 标签；模型选择器只显示思考强度“高”，未显示可核实的后端精确版本。
+
+服务端审计 `1790662476.040464`–`1790662584.497044`：同一 ChatGPT client 有 14 次 `capability_search`、4 次 `capability_get`、1 次 `ext_navigate`、1 次 `ext_fill_input`，全部 `ok=true`；没有 `ext_read_page` 或其他 `capability_not_found`。当次 catalog version 为 `8bd2eb59c7400481be5a0de2c87e5be0c80bf5c52494eb8e36211e35d8c49aaa`。`ext_navigate` 返回新 tab ID `59534752`；模型对该 ID 填写，报告 `filled=true`、`submitted=false`、`submit_attempted=false`。独立 Chrome UI 核对该合成标签的 `#note` 实时值确为上述字符串；随后关闭该测试标签。
+
+模型发现 `ext_get_dom` 只能保证 `outerHTML`，不能可靠证明实时 `.value`；另一个 `chrome_devtools__evaluate_script` 使用不同的 `pageId`，没有证据表明它与 Extension tab ID 是同一句柄。模型因此停止并如实说明**未能通过 4GPT 自身完成最终读回**。本次针对“不能猜测不存在的 `ext_read_page`”的行为回归 **PASS（1/1）**；4GPT 同源实时表单值读回能力仍缺失，后续可补一个按 Extension tab ID 定位的只读能力。focused 回归 `36 passed`。
+
+## 2026-09-29 同句柄实时元素状态补强
+
+针对上面的能力缺口，仓库新增只读 `ext_get_element_state`：输入 `tab_id + selector`，由同一 Chrome Extension bridge 在指定 tab 内读取单个元素的实时 property 状态，而不是复用 `outerHTML`。返回面刻意限制为 `value`、`checked`、`selected` / `selected_values`、`disabled`、`read_only`、元素类型和有限文本；不开放任意 JavaScript，也不枚举任意属性。工具 schema 要求 selector，显式 tab ID 时要求正整数，并在说明中要求核对动作复用 freshly observed 的同一句柄。
+
+该能力已接入 MCP 工具注册、browser capability catalog、发现关键词和 P5 HTTP downstream allowlist 示例；Python 适配层复用现有 response redaction/truncation policy（`personal_full_access` 下按既有设计保留完整响应，不把 `max_chars` 误表述为强制传输上限）。新增单元/协议测试覆盖同 tab 读回、缺失元素、只读 annotations、工具目录和描述契约。2026-09-29 本轮复核的 focused 子集为 **98 passed, 5 warnings**；随后完整 `uv run pytest -q` 为 **415 passed, 11 skipped, 5 warnings**。
+
+**尚未宣称 live PASS。** 本轮尝试把正式实例从 full 切回 compact 时，调用发生在服务自重启边界，4GPT MCP 连接随后不可用；为避免对不确定状态进行盲重放，没有再次执行重启。新 Extension 源码也需要 reload 后才能进入真实浏览器运行态。因此后续 live 验收仍需在服务恢复并 reload Extension 后，用 fresh `ext_list_tabs` / `ext_navigate` 的 `tab_id` 执行 `ext_fill_input(submit=false)`，再以同一 `tab_id` 调 `ext_get_element_state` 核对 `.value`。在完成该步骤前，此项状态为 **implemented / test-passed / live-pending**。

@@ -232,6 +232,7 @@ async function executeCommand(id, cmd, args) {
       case "browser_read":      result = await cmdBrowserRead(args); break;
       case "get_active_tab":    result = await cmdGetActiveTab(args); break;
       case "get_dom":           result = await cmdGetDom(args); break;
+      case "get_element_state": result = await cmdGetElementState(args); break;
       case "get_selection":     result = await cmdGetSelection(args); break;
       case "screenshot":        result = await cmdScreenshot(args); break;
       case "navigate":          result = await cmdNavigate(args); break;
@@ -325,6 +326,55 @@ async function cmdGetDom({ tabId, selector = "body" }) {
   });
 
   return { tabId: tab.id, url: result.url, html: result.html || "", error: result.error };
+}
+
+/** get_element_state: Return live state for one CSS-selected element */
+async function cmdGetElementState({ tabId, selector }) {
+  const tab = await getTargetTab(tabId);
+  const sel = selector;
+
+  const [{ result }] = await chrome.scripting.executeScript({
+    target: { tabId: tab.id },
+    func: (s) => {
+      const el = document.querySelector(s);
+      if (!el) {
+        return {
+          found: false,
+          url: location.href,
+          error: "No element matching: " + s,
+        };
+      }
+
+      const hasValue = "value" in el;
+      const hasChecked = "checked" in el;
+      const hasSelected = "selected" in el;
+      const isSelect = el instanceof HTMLSelectElement;
+      const inputType = el instanceof HTMLInputElement ? el.type : null;
+      const valueSuppressed = el instanceof HTMLInputElement
+        && ["password", "hidden", "file"].includes(inputType);
+      const text = typeof el.innerText === "string" ? el.innerText : (el.textContent || "");
+
+      return {
+        found: true,
+        url: location.href,
+        tagName: el.tagName,
+        type: inputType,
+        value: hasValue && !valueSuppressed ? String(el.value == null ? "" : el.value) : null,
+        valueSuppressed,
+        checked: hasChecked ? Boolean(el.checked) : null,
+        selected: hasSelected ? Boolean(el.selected) : null,
+        selectedValues: isSelect
+          ? Array.from(el.selectedOptions).map(option => String(option.value))
+          : null,
+        disabled: "disabled" in el ? Boolean(el.disabled) : null,
+        readOnly: "readOnly" in el ? Boolean(el.readOnly) : null,
+        text,
+      };
+    },
+    args: [sel],
+  });
+
+  return { tabId: tab.id, selector, ...result };
 }
 
 /** get_selection: Return currently selected text */

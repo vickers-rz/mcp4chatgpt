@@ -182,6 +182,7 @@ class ServerTests(unittest.TestCase):
                     "ext_list_tabs",
                     "ext_get_active_tab",
                     "ext_get_dom",
+                    "ext_get_element_state",
                     "ext_get_selection",
                     "ext_screenshot",
                     "ext_navigate",

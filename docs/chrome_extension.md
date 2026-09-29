@@ -97,6 +97,7 @@ ext_connection_status
 | `ext_list_tabs` | 列出所有 Chrome 窗口和标签页 |
 | `ext_get_active_tab` | 读取当前标签页：标题、URL、正文文本、选中文本 |
 | `ext_get_dom` | 获取页面 DOM（可指定 CSS selector） |
+| `ext_get_element_state` | 按 `tab_id + selector` 读取元素实时 `value`、勾选/选择状态等有限字段 |
 | `ext_get_selection` | 获取当前选中文字 |
 | `ext_screenshot` | 截图，保存为 PNG 文件 |
 

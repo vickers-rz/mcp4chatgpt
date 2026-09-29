@@ -580,6 +580,62 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(result["element_tag"], "TEXTAREA")
             self.assertEqual(result["error"], "setter failed")
 
+    def test_ext_get_element_state_preserves_live_value_and_tab_target(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabId": 7,
+                "url": "https://example.test/form",
+                "found": True,
+                "tagName": "TEXTAREA",
+                "type": None,
+                "value": "live value",
+                "valueSuppressed": False,
+                "checked": None,
+                "selected": None,
+                "selectedValues": [],
+                "disabled": False,
+                "readOnly": False,
+                "text": "",
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_get_element_state(
+                    config,
+                    "#note",
+                    tab_id=7,
+                    max_chars=1000,
+                )
+
+            send.assert_called_once_with(
+                "get_element_state",
+                {"selector": "#note", "tabId": 7},
+                timeout=15,
+            )
+            self.assertTrue(result["found"])
+            self.assertEqual(result["tab_id"], 7)
+            self.assertEqual(result["value"], "live value")
+            self.assertFalse(result["value_suppressed"])
+            self.assertFalse(result["value_truncated"])
+            self.assertFalse(result["read_only"])
+
+    def test_ext_get_element_state_reports_missing_element(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabId": 9,
+                "url": "https://example.test/form",
+                "found": False,
+                "error": "No element matching: #missing",
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_get_element_state(config, "#missing", tab_id=9)
+
+            self.assertFalse(result["found"])
+            self.assertEqual(result["url"], "https://example.test/form")
+            self.assertEqual(result["error"], "No element matching: #missing")
+
     def test_ext_fill_input_preserves_attempted_submission_status(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -901,6 +957,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("ext_list_tabs", names)
             self.assertIn("ext_get_active_tab", names)
             self.assertIn("ext_get_dom", names)
+            self.assertIn("ext_get_element_state", names)
             self.assertIn("ext_get_selection", names)
             self.assertIn("ext_screenshot", names)
             self.assertIn("ext_navigate", names)
@@ -983,6 +1040,7 @@ class CoreTests(unittest.TestCase):
             tools = {tool["name"]: tool for tool in registry.list_tools(auth_required=True)["tools"]}
 
             self.assertTrue(tools["ext_get_active_tab"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["ext_get_element_state"]["annotations"]["readOnlyHint"])
             self.assertTrue(tools["ext_screenshot"]["annotations"]["readOnlyHint"])
             self.assertTrue(tools["ext_listen_changes"]["annotations"]["readOnlyHint"])
             self.assertFalse(tools["ext_navigate"]["annotations"]["readOnlyHint"])
@@ -1004,6 +1062,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("Accessibility", tools["app_write_text"]["description"])
             self.assertIn("reuse the returned tab_id", tools["ext_navigate"]["description"])
             self.assertIn("same tab_id", tools["ext_fill_input"]["description"])
+            self.assertIn("same fresh tab_id", tools["ext_get_element_state"]["description"])
 
     def test_co_te_app_schemas_expose_non_terminal_apps(self) -> None:
         with tempfile.TemporaryDirectory() as d:

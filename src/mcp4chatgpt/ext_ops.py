@@ -157,6 +157,62 @@ def ext_get_dom(
 
 
 # ---------------------------------------------------------------------------
+# Element live state
+# ---------------------------------------------------------------------------
+
+def ext_get_element_state(
+    config: Config,
+    selector: str,
+    tab_id: int | None = None,
+    max_chars: int = 12000,
+) -> dict[str, Any]:
+    """Read live value/state for one DOM element in a Chrome tab."""
+    _require_connected()
+    if not selector or len(selector) > 500:
+        raise ValueError("selector must be a non-empty CSS selector (max 500 chars)")
+    max_chars = max(100, min(max_chars, config.max_output_chars))
+    args: dict[str, Any] = {"selector": selector}
+    if tab_id is not None:
+        args["tabId"] = tab_id
+    result = ext_bridge.send_command("get_element_state", args, timeout=15)
+
+    def _clean_text(value: Any) -> tuple[str | None, bool]:
+        if value is None:
+            return None, False
+        redacted = response_redact(config, str(value))
+        return response_truncate(config, redacted, max_chars)
+
+    value, value_truncated = _clean_text(result.get("value"))
+    text, text_truncated = _clean_text(result.get("text"))
+    selected_values = [
+        response_redact(config, str(item))
+        for item in (result.get("selectedValues") or [])
+    ]
+
+    output: dict[str, Any] = {
+        "tab_id": result.get("tabId"),
+        "url": response_redact(config, str(result.get("url", ""))),
+        "selector": selector,
+        "found": bool(result.get("found", False)),
+        "element_tag": result.get("tagName"),
+        "element_type": result.get("type"),
+        "value": value,
+        "value_suppressed": bool(result.get("valueSuppressed", False)),
+        "value_truncated": value_truncated,
+        "checked": result.get("checked"),
+        "selected": result.get("selected"),
+        "selected_values": selected_values,
+        "disabled": result.get("disabled"),
+        "read_only": result.get("readOnly"),
+        "text": text,
+        "text_truncated": text_truncated,
+    }
+    if error := result.get("error"):
+        output["error"] = response_redact(config, str(error))
+    return output
+
+
+# ---------------------------------------------------------------------------
 # Selection
 # ---------------------------------------------------------------------------
 

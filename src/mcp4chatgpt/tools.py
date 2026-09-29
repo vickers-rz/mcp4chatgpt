@@ -213,6 +213,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_list_tabs",
         "ext_get_active_tab",
         "ext_get_dom",
+        "ext_get_element_state",
         "ext_get_selection",
         "ext_screenshot",
         "ext_navigate",
@@ -891,6 +892,25 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 a.get("tab_id"),
                 str(a.get("selector", "body")),
                 int(a.get("max_chars", 50000)),
+            ),
+        ),
+        Tool(
+            "ext_get_element_state",
+            "Read live state for one CSS-selected element from a Chrome tab, including its current value/check/selection state. Use the same fresh tab_id returned by ext_list_tabs or ext_navigate when verifying a prior browser action. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "tab_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Target Chrome Extension tab ID. Reuse a freshly observed tab_id for state verification.",
+                },
+                "selector": {"type": "string", "description": "CSS selector for one element to inspect."},
+                "max_chars": {"type": "integer", "default": 12000},
+            }, ["selector"]),
+            lambda c, a: ext_ops.ext_get_element_state(
+                c,
+                str(a["selector"]),
+                a.get("tab_id"),
+                int(a.get("max_chars", 12000)),
             ),
         ),
         Tool(
