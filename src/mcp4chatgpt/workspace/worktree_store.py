@@ -95,12 +95,16 @@ class WorktreeStore:
         source_repo: Path,
         base_commit: str,
         destination: Path,
+        reservation_id: str | None = None,
+        scope_metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        path = self._operation_path(operation_id)
+        key = reservation_id or operation_id
+        path = self._operation_path(key)
         if path.exists():
             raise ValueError("worktree_operation_already_reserved")
         value = {
             "operation_id": operation_id,
+            "reservation_id": key,
             "fingerprint": fingerprint,
             "worktree_id": self.validate_worktree_id(worktree_id),
             "source_repo": str(source_repo),
@@ -108,6 +112,8 @@ class WorktreeStore:
             "destination": str(destination),
             "state": "reserved",
         }
+        if scope_metadata is not None:
+            value["scope"] = scope_metadata
         self._write_json(path, value)
         return value
 

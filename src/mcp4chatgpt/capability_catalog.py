@@ -56,6 +56,9 @@ _CATEGORY_MEMBERS: dict[str, frozenset[str]] = {
     "git": frozenset({
         "local_git_status", "local_git_diff", "local_git_log", "local_git_show",
     }),
+    "workspace": frozenset({
+        "local_worktree_create", "local_worktree_status", "local_worktree_list", "local_worktree_remove",
+    }),
     "browser": frozenset({
         "chrome_list_tabs", "chrome_get_active_tab_context",
         "browser_list_tabs", "browser_current_tab", "browser_get_page_text",
@@ -88,6 +91,10 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
     "local_job_logs": ("job", "background", "logs", "stdout", "stderr", "后台任务", "日志"),
     "local_list_jobs": ("job", "background", "list", "后台任务", "任务列表"),
     "local_cancel_job": ("job", "background", "cancel", "stop", "后台任务", "取消", "停止"),
+    "local_worktree_create": ("worktree", "git", "workspace", "isolate", "branch", "工作区", "分支", "创建工作区", "隔离"),
+    "local_worktree_status": ("worktree", "git", "workspace", "status", "dirty", "工作区", "状态", "检查"),
+    "local_worktree_list": ("worktree", "git", "workspace", "list", "工作区", "列表"),
+    "local_worktree_remove": ("worktree", "git", "workspace", "remove", "delete", "clean", "工作区", "删除", "移除", "清理"),
     "capability_search": ("discovery", "search", "tool search", "capability", "发现", "检索", "工具搜索"),
     "capability_get": ("discovery", "schema", "definition", "capability", "发现", "定义", "模式"),
     "capability_list": ("discovery", "catalog", "inventory", "list", "发现", "目录", "清单"),

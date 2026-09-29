@@ -48,6 +48,7 @@ from .mcp_types import RawMCPToolResult
 from .downstream.manager import DownstreamMCPManager
 from .operations import tool_api as operation_tool_api
 from .jobs import tool_api as job_tool_api
+from .workspace import worktree_tool_api
 
 
 ToolHandler = Callable[[Config, dict[str, Any]], Any]
@@ -172,6 +173,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_request_permissions", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
         "local_apply_patch", "local_strict_write_file", "local_strict_apply_patch",
+        "local_worktree_create", "local_worktree_remove",
         "local_run_command",
         "local_start_job",
         "local_cancel_job",
@@ -232,6 +234,8 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
         "local_apply_patch",
+        "local_worktree_create",
+        "local_worktree_remove",
         "local_run_command",
         "local_start_job",
         "local_cancel_job",
@@ -247,7 +251,8 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
     }
     protocol_idempotent = name in {"local_start_job", "local_cancel_job",
                                    "local_strict_write_file", "local_strict_apply_patch",
-                                   "local_operation_reconcile"}
+                                   "local_operation_reconcile",
+                                   "local_worktree_create", "local_worktree_remove"}
     return {
         "readOnlyHint": name not in mutating,
         "destructiveHint": destructive,
@@ -629,6 +634,49 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 ["job_id"],
             ),
             job_tool_api.cancel,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_worktree_create",
+            "Create an isolated managed Git worktree for concurrent coding sessions from an exact clean-source commit. Scoped by authenticated principal and workspace. Replay returns the existing worktree.",
+            _schema(
+                {
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "cwd": {"type": "string"},
+                    "base_ref": {"type": "string", "default": "HEAD"},
+                },
+                ["operation_id", "cwd"],
+            ),
+            worktree_tool_api.create,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_worktree_status",
+            "Inspect the live status of one managed Git worktree by its worktree_id, including registered status, clean/dirty state, and HEAD commit.",
+            _schema(
+                {"worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"}},
+                ["worktree_id"],
+            ),
+            worktree_tool_api.status,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_worktree_list",
+            "List managed Git worktrees accessible to the current authenticated principal.",
+            _schema(
+                {"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}},
+            ),
+            worktree_tool_api.list_worktrees,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_worktree_remove",
+            "Remove one clean managed Git worktree by its worktree_id. Rejects removal if worktree is dirty. Replay after removal is a no-op.",
+            _schema(
+                {"worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"}},
+                ["worktree_id"],
+            ),
+            worktree_tool_api.remove,
             needs_client_id=True,
         ),
         Tool(
