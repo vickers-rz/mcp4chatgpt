@@ -29,6 +29,9 @@ ChatGPT ── MCP JSON-RPC ──▶ MCP4ChatGPT Server (:8766)
 3. 点击 **「加载已解压的扩展程序」**
 4. 选择目录：`<项目根目录>/src/chrome_extension/`
 5. 扩展会出现在工具栏，图标为紫色闪电⚡
+6. **源码更新后必须回到 `chrome://extensions/` 对该 unpacked extension 点击「重新加载 / Reload」**。仅重启 MCP 服务不会让已经运行的 Service Worker 自动采用新的 `background.js`。
+
+从扩展 **1.0.5** 起，WebSocket 认证握手同时广告 bridge protocol revision 和 `supportedCommands`。服务端据此区分“已连接但仍运行旧 background”和“当前 runtime 已支持新命令”。
 
 ### 方式 B — 打包安装
 
@@ -88,7 +91,7 @@ for line in secret.splitlines():
 ```
 ext_connection_status
 ```
-> 返回扩展是否连接、连接时长等信息。**每次使用浏览器工具前，建议先调用此工具确认连接状态。**
+> 返回扩展是否连接、连接时长、protocol revision、命令广告状态等信息。**每次使用浏览器工具前，建议先调用此工具确认连接状态。** 若 `extension_reload_required=true`，说明 WebSocket 虽已连接，但 Chrome 仍在运行旧 Extension background；先在 `chrome://extensions/` Reload，再等待新的 `connection_generation` 出现。
 
 ### 读取工具
 

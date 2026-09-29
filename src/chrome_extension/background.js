@@ -5,7 +5,7 @@
  * Routes MCP commands to the appropriate Chrome APIs and returns results.
  *
  * Message protocol (JSON):
- *   Client → Server:  { type: "auth", token, version, platform }
+ *   Client → Server:  { type: "auth", token, version, platform, protocolRevision, supportedCommands }
  *   Server → Client:  { type: "auth_ok" }
  *   Server → Client:  { type: "command", id, cmd, args }
  *   Client → Server:  { type: "response", id, result } | { type: "response", id, error }
@@ -25,6 +25,23 @@ const DEFAULT_CONFIG = {
   autoReconnect: true,
   reconnectDelayMs: 3000,
 };
+
+const BRIDGE_PROTOCOL_REVISION = 2;
+const SUPPORTED_COMMANDS = Object.freeze([
+  "list_tabs",
+  "browser_search",
+  "browser_read",
+  "get_active_tab",
+  "get_dom",
+  "get_element_state",
+  "get_selection",
+  "screenshot",
+  "navigate",
+  "click_element",
+  "fill_input",
+  "run_js",
+  "subscribe_changes",
+]);
 
 let config = { ...DEFAULT_CONFIG };
 let ws = null;
@@ -70,6 +87,8 @@ function connect() {
       token: config.bridgeToken,
       version: chrome.runtime.getManifest().version,
       platform: navigator.platform,
+      protocolRevision: BRIDGE_PROTOCOL_REVISION,
+      supportedCommands: SUPPORTED_COMMANDS,
     }));
   };
 

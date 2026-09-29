@@ -495,6 +495,26 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(status["connected"])
             self.assertIn("NOT connected", status["hint"])
 
+    def test_ext_connection_status_legacy_runtime_requires_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            legacy = {
+                "connected": True,
+                "version": "1.0.4",
+                "platform": "MacIntel",
+                "protocol_revision": 1,
+                "supported_commands": None,
+                "capabilities_advertised": False,
+            }
+            with mock.patch("mcp4chatgpt.ext_bridge.connection_info", return_value=legacy), \
+                    mock.patch("mcp4chatgpt.ext_bridge.command_support", return_value=None):
+                status = ext_ops.ext_connection_status(config)
+
+            self.assertTrue(status["connected"])
+            self.assertTrue(status["extension_reload_required"])
+            self.assertEqual(status["missing_required_commands"], ["get_element_state"])
+            self.assertIn("Reload or upgrade", status["hint"])
+
     def test_ext_list_tabs_requires_connection(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -580,6 +600,29 @@ class CoreTests(unittest.TestCase):
             self.assertEqual(result["element_tag"], "TEXTAREA")
             self.assertEqual(result["error"], "setter failed")
 
+    def test_ext_get_element_state_rejects_legacy_runtime_before_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock()
+            legacy = {
+                "connected": True,
+                "version": "1.0.4",
+                "protocol_revision": 1,
+                "supported_commands": None,
+                "capabilities_advertised": False,
+            }
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.command_support", return_value=None), \
+                    mock.patch("mcp4chatgpt.ext_bridge.connection_info", return_value=legacy), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                with self.assertRaisesRegex(
+                    ext_ops.ExtCapabilityUnavailableError,
+                    "Reload or upgrade",
+                ):
+                    ext_ops.ext_get_element_state(config, "#note", tab_id=7)
+
+            send.assert_not_called()
+
     def test_ext_get_element_state_preserves_live_value_and_tab_target(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -599,6 +642,7 @@ class CoreTests(unittest.TestCase):
                 "text": "",
             })
             with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.command_support", return_value=True), \
                     mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
                 result = ext_ops.ext_get_element_state(
                     config,
@@ -629,6 +673,7 @@ class CoreTests(unittest.TestCase):
                 "error": "No element matching: #missing",
             })
             with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.command_support", return_value=True), \
                     mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
                 result = ext_ops.ext_get_element_state(config, "#missing", tab_id=9)
 
