@@ -11,10 +11,11 @@ import threading
 import time
 from dataclasses import replace
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
-from mcp4chatgpt.oauth import AUTH_CODES, issue_token
+from mcp4chatgpt.oauth import create_auth_redirect, issue_token, register_client
 from mcp4chatgpt.server import create_server
 from mcp4chatgpt.downstream.models import DownstreamToolInfo
 from test_core import make_config
@@ -165,13 +166,15 @@ for (const name of JSON.parse(process.argv[1])) {
     mcpc_home.mkdir(mode=0o700)
     (mcpc_home / "logs").mkdir(mode=0o700)
     config_path = tmp_path / "mcpc.json"
-    code = f"test-{time.time_ns()}"
-    AUTH_CODES[code] = {
-        "client_id": "mcpc-acceptance",
-        "redirect_uri": "https://test.invalid/callback",
-        "created_at": time.time(),
-    }
-    token = issue_token(config, {"code": code, "client_id": "mcpc-acceptance"})["access_token"]
+    redirect_uri = "https://test.invalid/callback"
+    client = register_client(config, {"redirect_uris": [redirect_uri]})
+    params = {"client_id": client["client_id"], "redirect_uri": redirect_uri}
+    location = create_auth_redirect(config, params, config.auth_secret)
+    code = parse_qs(urlsplit(location).query)["code"][0]
+    token = issue_token(config, {
+        **params, "code": code, "grant_type": "authorization_code",
+        "client_secret": client["client_secret"],
+    })["access_token"]
     host, port = server.server_address
     _create_private_file(config_path)
     config_path.write_text(json.dumps({"mcpServers": {"sut": {
