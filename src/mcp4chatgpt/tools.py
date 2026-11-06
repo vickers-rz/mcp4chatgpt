@@ -769,7 +769,7 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
         ),
         Tool(
             "coding_task_inspect",
-            "Inspect a coding task, its worktree, validation freshness, and published refs/mcp4chatgpt/tasks/<task_id> target.",
+            "Inspect a coding task, its worktree, validation freshness, and the target of its published task_ref.",
             _schema(
                 {
                     "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
@@ -815,7 +815,7 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
         ),
         Tool(
             "coding_task_publish",
-            "Publish only a still-current validated candidate using compare-and-swap to refs/mcp4chatgpt/tasks/<task_id>. Rejects stale validation and ref drift.",
+            "Publish only a still-current validated candidate using compare-and-swap on its scoped task_ref. Rejects stale validation and ref drift.",
             _schema(
                 {
                     "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
