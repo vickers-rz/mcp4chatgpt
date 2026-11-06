@@ -198,17 +198,18 @@ uv run pytest -q \
 64 passed
 ```
 
-## 6. Remaining P3 work
+## 6. P3 acceptance coverage and remaining work
 
-The following are intentionally not called complete by this document:
+The following distinguishes tested boundaries from remaining hardening:
 
 1. **Fault-injection and multi-process acceptance**
-   - Validation launch tests kill the service worker before the running record is saved, before gate release, and after the command has started. Add equivalent coverage around command completion, evidence persistence, and publication state persistence.
-   - Add multi-process races beyond the existing worktree and CAS coverage.
+   - Independent service-worker SIGKILL tests cover launch before the running record, before gate release, after command start, before/after evidence persistence, and before/after completed validation and publication records.
+   - Three simultaneous service processes retry the same validation or publication. Tests require exactly one original response, replayed responses for the others, and exactly one command side effect.
+   - These cover the named completion boundaries and same-operation races; they do not establish exhaustive crash safety for all filesystem failures or competing operations.
 
 2. **Interrupted-command reconciliation acceptance**
    - The durable running/uncertain marker prevents blind command replay, and explicit abandonment is available.
-   - Process crash and orphaned-child scenarios still need fault injection to establish the exact guarantees and operator procedure.
+   - Worker-crash recovery is exercised at the boundaries above. Broader orphaned-child and competing-operation scenarios remain additional hardening work.
 
 Accordingly, the current status is:
 
@@ -242,6 +243,34 @@ group are outside this guarantee.
 An unresolved attempt makes earlier evidence non-current and blocks editing,
 publishing, and integration until reconciliation. If the service crashed before
 it recorded a process group, the reconciliation endpoint cannot establish exit
-and leaves the attempt unresolved.
+and leaves the attempt unresolved unless an operator uses the legacy-only
+`abandon_unknown_process` resolution with both `confirm_effects_reviewed` and
+`confirm_no_process_running` set to true. This is an explicit manual assertion,
+not automatic process-exit detection.
 
 On publish or integrate, a single Git reference transaction verifies the legacy ref against the recorded published commit and creates or verifies the scoped ref. Drift causes a conflict and the legacy ref is retained.
+
+### Completion-boundary acceptance (2026-11-07)
+
+`tests/test_review_fixes.py` now kills an independent service process at six
+completion boundaries. Before the completed validation record is durable,
+retries refuse to execute the command and publication is blocked; explicit
+abandonment permanently retires the operation ID. A separately written
+evidence file alone is not treated as committed validation. After the record
+is durable, the original result is replayed. If publication updates the Git
+reference before its task record, retry reconciles the record against that
+reference; after the record is durable, retry replays publication. Every case
+checks that the command's external append happened exactly once.
+
+Two additional tests synchronize three independent service processes before
+concurrent validation/publication retries. Task locking serializes each race
+and returns one original result plus two replays. Targeted regression:
+`sh scripts/test.sh -q tests/test_review_fixes.py --tb=short` — **27 passed**.
+No production service or real ChatGPT session was changed by these tests.
+
+Full regression on 2026-11-07: `sh scripts/test.sh -q --tb=short` —
+**492 passed, 11 skipped** (five SWIG deprecation warnings);
+`node --test tests/browser_search.test.mjs` — **6 passed**.
+The opt-in isolated MCP/OAuth acceptance was not rerun in this test-only change;
+its previous result remains 10 passed. Production deployment and real-client
+acceptance remain outstanding.

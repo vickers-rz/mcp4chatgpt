@@ -356,3 +356,160 @@ def test_validation_recovers_after_worker_sigkill(tmp_path, phase):
         assert effect.read_text() == 'x'
     else:
         assert not effect.exists()
+
+
+def _completion_crash_worker(config, request, phase):
+    """Kill a separate service process at a durable completion boundary."""
+    import signal
+    from mcp4chatgpt.workspace import coding_tasks
+    from mcp4chatgpt.workspace.worktree_store import WorktreeStore
+
+    write_task = WorktreeStore.write_task
+    replace = coding_tasks.recovery.atomic_replace_bytes
+
+    def die():
+        os.kill(os.getpid(), signal.SIGKILL)
+
+    def evidence_checkpoint(path, *args, **kwargs):
+        if Path(path).name == 'evidence.json' and phase == 'before_evidence':
+            die()
+        result = replace(path, *args, **kwargs)
+        if Path(path).name == 'evidence.json' and phase == 'after_evidence':
+            die()
+        return result
+
+    def task_checkpoint(store, key, record):
+        target = 'published' if phase.startswith('publish_') else 'validated'
+        if record.get('state') == target and phase.endswith('before_record'):
+            die()
+        result = write_task(store, key, record)
+        if record.get('state') == target and phase.endswith('after_record'):
+            die()
+        return result
+
+    coding_tasks.recovery.atomic_replace_bytes = evidence_checkpoint
+    WorktreeStore.write_task = task_checkpoint
+    if phase.startswith('publish_'):
+        api.publish(config, request, 'a')
+    else:
+        api.validate(config, request, 'a')
+
+
+def _join_worker(worker):
+    worker.start()
+    try:
+        worker.join(20)
+        assert not worker.is_alive(), 'worker did not finish within deadline'
+        return worker.exitcode
+    finally:
+        if worker.is_alive():
+            worker.kill()
+            worker.join(5)
+
+
+@pytest.mark.parametrize('phase', [
+    'before_evidence', 'after_evidence', 'before_record', 'after_record',
+    'publish_before_record', 'publish_after_record',
+])
+def test_completion_sigkill_preserves_at_most_once_execution(tmp_path, phase):
+    import multiprocessing
+    import shlex
+    import signal
+    from mcp4chatgpt.workspace.worktree_store import WorktreeStore
+
+    config = _config(tmp_path)
+    repo = config.allowed_roots[0] / 'repo'
+    scope = {'cwd': str(repo), 'task_id': 'completion'}
+    task = api.create(config, {**scope, 'paths': ['app.txt']}, 'a')
+    (Path(task['path']) / 'app.txt').write_text('candidate\n')
+    effect = tmp_path / 'executions'
+    request = {**scope, 'operation_id': 'v', 'command': f'printf x >> {shlex.quote(str(effect))}'}
+    publishing = phase.startswith('publish_')
+    if publishing:
+        api.validate(config, request, 'a')
+    worker = multiprocessing.get_context('spawn').Process(
+        target=_completion_crash_worker,
+        args=(config, scope if publishing else request, phase),
+    )
+    assert _join_worker(worker) == -signal.SIGKILL
+    assert effect.read_text() == 'x'
+    store = WorktreeStore(config.data_dir / 'managed-worktrees')
+    record = store.read_task(task['task_key'])
+    if publishing:
+        candidate = record['validation']['candidate_commit']
+        assert _git(repo, 'rev-parse', task['task_ref']) == candidate
+        result = api.publish(config, scope, 'a')
+        assert result['published']
+        assert result['reconciled'] == (phase == 'publish_before_record')
+        assert api.publish(config, scope, 'a')['replayed']
+    elif phase == 'after_record':
+        assert api.validate(config, request, 'a')['validation_replayed']
+        assert len(record['validation_history']) == 1
+    else:
+        assert record['validation_attempt']['state'] == 'running'
+        evidence = list(config.data_dir.rglob('evidence.json'))
+        assert bool(evidence) == (phase != 'before_evidence')
+        with pytest.raises(ValueError, match='validation_uncertain'):
+            api.validate(config, request, 'a')
+        with pytest.raises(ValueError, match='validation'):
+            api.publish(config, scope, 'a')
+        assert api.reconcile_validation(config, {
+            **scope, 'operation_id': 'v', 'resolution': 'abandon',
+            'confirm_effects_reviewed': True,
+        }, 'a')['reconciled']
+        with pytest.raises(ValueError, match='validation_operation_abandoned'):
+            api.validate(config, request, 'a')
+    assert effect.read_text() == 'x'
+
+
+def _concurrent_task_worker(config, request, operation, ready, start, results):
+    ready.put(True)
+    if not start.wait(15):
+        raise RuntimeError('concurrent start timed out')
+    results.put(getattr(api, operation)(config, request, 'a'))
+
+
+@pytest.mark.parametrize('operation', ['validate', 'publish'])
+def test_task_multiprocess_retries_execute_once(tmp_path, operation):
+    import multiprocessing
+    import shlex
+
+    config = _config(tmp_path)
+    scope = {'cwd': str(config.allowed_roots[0] / 'repo'), 'task_id': 'race'}
+    task = api.create(config, {**scope, 'paths': ['app.txt']}, 'a')
+    (Path(task['path']) / 'app.txt').write_text('candidate\n')
+    effect = tmp_path / 'executions'
+    validation = {**scope, 'operation_id': 'v', 'command': f'printf x >> {shlex.quote(str(effect))}'}
+    if operation == 'publish':
+        api.validate(config, validation, 'a')
+    context = multiprocessing.get_context('spawn')
+    ready, results = context.Queue(), context.Queue()
+    start = context.Event()
+    workers = [context.Process(target=_concurrent_task_worker, args=(
+        config, validation if operation == 'validate' else scope,
+        operation, ready, start, results,
+    )) for _ in range(3)]
+    try:
+        for worker in workers:
+            worker.start()
+        for _ in workers:
+            assert ready.get(timeout=15)
+        start.set()
+        responses = [results.get(timeout=20) for _ in workers]
+        for worker in workers:
+            worker.join(10)
+            assert worker.exitcode == 0
+        replay_key = 'validation_replayed' if operation == 'validate' else 'replayed'
+        assert sum(not response[replay_key] for response in responses) == 1
+        assert effect.read_text() == 'x'
+        observed = api.inspect(config, scope, 'a')
+        assert observed['validation_current']
+        if operation == 'publish':
+            assert observed['publication_current']
+    finally:
+        for worker in workers:
+            if worker.is_alive():
+                worker.kill()
+                worker.join(5)
+        ready.close()
+        results.close()
