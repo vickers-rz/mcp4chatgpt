@@ -57,7 +57,9 @@ _CATEGORY_MEMBERS: dict[str, frozenset[str]] = {
         "local_git_status", "local_git_diff", "local_git_log", "local_git_show",
     }),
     "workspace": frozenset({
+        "coding_task_read_file", "coding_task_write_file", "coding_task_apply_patch",
         "local_worktree_create", "local_worktree_status", "local_worktree_list", "local_worktree_remove",
+        "coding_task_create", "coding_task_inspect", "coding_task_validate", "coding_task_reconcile_validation", "coding_task_publish", "coding_task_integrate",
     }),
     "browser": frozenset({
         "chrome_list_tabs", "chrome_get_active_tab_context",
@@ -95,6 +97,12 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
     "local_worktree_status": ("worktree", "git", "workspace", "status", "dirty", "工作区", "状态", "检查"),
     "local_worktree_list": ("worktree", "git", "workspace", "list", "工作区", "列表"),
     "local_worktree_remove": ("worktree", "git", "workspace", "remove", "delete", "clean", "工作区", "删除", "移除", "清理"),
+    "coding_task_create": ("coding", "task", "worktree", "baseline", "isolate", "代码任务", "基线", "隔离"),
+    "coding_task_inspect": ("coding", "task", "inspect", "validation", "artifact", "代码任务", "检查", "验证"),
+    "coding_task_validate": ("coding", "task", "validate", "test", "candidate commit", "evidence", "代码任务", "验证", "测试", "候选提交"),
+    "coding_task_reconcile_validation": ("coding", "task", "reconcile", "validation", "uncertain", "abandon", "代码任务", "验证", "恢复", "核对"),
+    "coding_task_publish": ("coding", "task", "publish", "git ref", "cas", "artifact", "代码任务", "发布", "成果引用", "冲突"),
+    "coding_task_integrate": ("coding", "task", "integrate", "fast-forward", "source checkout", "expected commit", "代码任务", "集成", "快进", "源工作区"),
     "capability_search": ("discovery", "search", "tool search", "capability", "发现", "检索", "工具搜索"),
     "capability_get": ("discovery", "schema", "definition", "capability", "发现", "定义", "模式"),
     "capability_list": ("discovery", "catalog", "inventory", "list", "发现", "目录", "清单"),

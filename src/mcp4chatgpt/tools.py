@@ -48,7 +48,7 @@ from .mcp_types import RawMCPToolResult
 from .downstream.manager import DownstreamMCPManager
 from .operations import tool_api as operation_tool_api
 from .jobs import tool_api as job_tool_api
-from .workspace import worktree_tool_api
+from .workspace import coding_task_tool_api, worktree_tool_api
 
 
 ToolHandler = Callable[[Config, dict[str, Any]], Any]
@@ -169,6 +169,8 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
     allowlists, command blocking, and audit logging independently.
     """
     mutating = {
+        "coding_task_create", "coding_task_validate", "coding_task_reconcile_validation",
+        "coding_task_publish", "coding_task_integrate", "coding_task_write_file", "coding_task_apply_patch",
         "pdf_redact_text", "pdf_insert_text",
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_request_permissions", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
@@ -199,6 +201,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "computer_list_apps", "computer_get_state", "computer_screenshot", "computer_list_displays", "computer_screenshot_display", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll", "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard",
         "local_run_command",
         "local_start_job",
+        "coding_task_validate",
         "app_get_context",
         "app_write_text",
         "terminal_run_command",
@@ -230,6 +233,8 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_listen_changes",
     }
     destructive = name in {
+        "coding_task_create", "coding_task_validate", "coding_task_reconcile_validation",
+        "coding_task_publish", "coding_task_integrate", "coding_task_write_file", "coding_task_apply_patch",
         "pdf_redact_text", "pdf_insert_text",
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
@@ -652,41 +657,187 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
         ),
         Tool(
             "local_worktree_status",
-            "Inspect the live status of one managed Git worktree by its worktree_id, including registered status, clean/dirty state, and HEAD commit.",
+            "Inspect one managed Git worktree within the authenticated principal and repository workspace, including registered status, clean/dirty state, and HEAD commit.",
             _schema(
                 {
                     "worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"},
-                    "cwd": {"type": "string", "description": "Optional repository path to verify workspace authorization."},
+                    "cwd": {"type": "string", "description": "Repository path used to prove workspace authorization."},
                 },
-                ["worktree_id"],
+                ["worktree_id", "cwd"],
             ),
             worktree_tool_api.status,
             needs_client_id=True,
         ),
         Tool(
             "local_worktree_list",
-            "List managed Git worktrees accessible to the current authenticated principal with stable cursor pagination and optional repository scoping.",
+            "Page through managed Git worktrees scoped to the authenticated principal and repository workspace.",
             _schema(
                 {
                     "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
                     "cursor": {"type": "string", "description": "Opaque cursor (worktree_id) from previous response next_cursor for pagination."},
-                    "cwd": {"type": "string", "description": "Optional repository path to filter worktrees belonging to a specific workspace."},
+                    "cwd": {"type": "string", "description": "Repository path used to select and authorize the workspace."},
                 },
+                ["cwd"],
             ),
             worktree_tool_api.list_worktrees,
             needs_client_id=True,
         ),
         Tool(
             "local_worktree_remove",
-            "Remove one clean managed Git worktree by its worktree_id. Rejects removal if worktree is dirty. Replay after removal is a no-op.",
+            "Remove one clean managed Git worktree within the authenticated principal and repository workspace. Rejects dirty worktrees; replay after removal is a no-op.",
             _schema(
                 {
                     "worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"},
-                    "cwd": {"type": "string", "description": "Optional repository path to verify workspace authorization."},
+                    "cwd": {"type": "string", "description": "Repository path used to prove workspace authorization."},
                 },
-                ["worktree_id"],
+                ["worktree_id", "cwd"],
             ),
             worktree_tool_api.remove,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_read_file",
+            "Read a UTF-8 file relative to the task checkout and return its version and replacement proof.",
+            _schema(
+                {
+                    "cwd": {"type": "string"},
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "path": {"type": "string", "minLength": 1},
+                    "max_chars": {"type": "integer"},
+                },
+                ["cwd", "task_id", "path"],
+            ),
+            coding_task_tool_api.read_file,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_write_file",
+            "Transactionally create or replace a declared task file. Overwrite requires a version and replacement proof.",
+            _schema(
+                {
+                    "cwd": {"type": "string"},
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "path": {"type": "string", "minLength": 1},
+                    "content": {"type": "string"},
+                    "overwrite": {"type": "boolean"},
+                    "expected_sha256": {"type": "string"},
+                    "full_replace_token": {"type": "string"},
+                    "allow_large_reduction": {"type": "boolean"},
+                },
+                ["cwd", "task_id", "path", "content"],
+            ),
+            coding_task_tool_api.write_file,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_apply_patch",
+            "Replace exact text in a declared task file using its expected SHA-256.",
+            _schema(
+                {
+                    "cwd": {"type": "string"},
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "path": {"type": "string", "minLength": 1},
+                    "old": {"type": "string"},
+                    "new": {"type": "string"},
+                    "expected_sha256": {"type": "string"},
+                },
+                ["cwd", "task_id", "path", "old", "new", "expected_sha256"],
+            ),
+            coding_task_tool_api.apply_patch,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_create",
+            "Create or replay a validated coding task pinned to an exact Git baseline. The task owns an isolated managed worktree and an explicit set of repository-relative paths.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                    "base_ref": {"type": "string", "default": "HEAD"},
+                    "paths": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 200,
+                        "uniqueItems": True,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 512},
+                    },
+                },
+                ["task_id", "cwd", "paths"],
+            ),
+            coding_task_tool_api.create,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_inspect",
+            "Inspect a coding task, its worktree, validation freshness, and published refs/mcp4chatgpt/tasks/<task_id> target.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                },
+                ["task_id", "cwd"],
+            ),
+            coding_task_tool_api.inspect,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_validate",
+            "Commit only the task's declared paths, run a validation command in the isolated worktree, and persist evidence bound to the exact candidate commit/tree. The command has worktree isolation but no OS-level sandbox.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "command": {"type": "string", "minLength": 1},
+                    "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 1800, "default": 300},
+                },
+                ["task_id", "cwd", "operation_id", "command"],
+            ),
+            coding_task_tool_api.validate,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_reconcile_validation",
+            "Abandon an interrupted validation operation after reviewing possible command effects. Refuses while its recorded process group is still running; the operation_id cannot be reused.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "resolution": {"type": "string", "enum": ["abandon", "abandon_unknown_process"]},
+                    "confirm_effects_reviewed": {"type": "boolean", "const": True},
+                    "confirm_no_process_running": {"type": "boolean"},
+                },
+                ["task_id", "cwd", "operation_id", "resolution", "confirm_effects_reviewed"],
+            ),
+            coding_task_tool_api.reconcile_validation,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_publish",
+            "Publish only a still-current validated candidate using compare-and-swap to refs/mcp4chatgpt/tasks/<task_id>. Rejects stale validation and ref drift.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                },
+                ["task_id", "cwd"],
+            ),
+            coding_task_tool_api.publish,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_integrate",
+            "Fast-forward a clean source checkout to the published task candidate only when source HEAD equals expected_source_commit. Rejects dirty or diverged source state; never reset/rebase/cherry-pick automatically.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                    "expected_source_commit": {"type": "string", "pattern": r"^[a-fA-F0-9]{40}$"},
+                },
+                ["task_id", "cwd", "expected_source_commit"],
+            ),
+            coding_task_tool_api.integrate,
             needs_client_id=True,
         ),
         Tool(

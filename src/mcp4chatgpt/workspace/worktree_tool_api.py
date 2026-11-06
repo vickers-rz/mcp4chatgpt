@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Any
 
 from ..config import Config
-from ..safety import resolve_allowed_path
 from . import worktrees
 
 _SCOPE_VERSION = 1
@@ -77,9 +76,7 @@ def create(config: Config, args: dict[str, Any], client_id: str | None = None) -
 
 
 def status(config: Config, args: dict[str, Any], client_id: str | None = None) -> dict[str, Any]:
-    expected_workspace_id = None
-    if args.get("cwd"):
-        _, expected_workspace_id = _workspace(config, args["cwd"])
+    _, expected_workspace_id = _workspace(config, args["cwd"])
     return worktrees.worktree_status(
         config,
         args["worktree_id"],
@@ -90,9 +87,7 @@ def status(config: Config, args: dict[str, Any], client_id: str | None = None) -
 
 
 def list_worktrees(config: Config, args: dict[str, Any], client_id: str | None = None) -> dict[str, Any]:
-    expected_workspace_id = None
-    if args.get("cwd"):
-        _, expected_workspace_id = _workspace(config, args["cwd"])
+    _, expected_workspace_id = _workspace(config, args["cwd"])
     return worktrees.list_worktrees(
         config,
         limit=int(args.get("limit", 50)),
@@ -104,9 +99,7 @@ def list_worktrees(config: Config, args: dict[str, Any], client_id: str | None =
 
 
 def remove(config: Config, args: dict[str, Any], client_id: str | None = None) -> dict[str, Any]:
-    expected_workspace_id = None
-    if args.get("cwd"):
-        _, expected_workspace_id = _workspace(config, args["cwd"])
+    _, expected_workspace_id = _workspace(config, args["cwd"])
     return worktrees.remove_worktree(
         config,
         args["worktree_id"],

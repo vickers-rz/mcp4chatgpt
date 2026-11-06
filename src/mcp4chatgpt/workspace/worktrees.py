@@ -6,7 +6,6 @@ import hashlib
 import json
 import subprocess
 import uuid
-from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -105,9 +104,14 @@ def _worktree_entries(repo: Path) -> dict[Path, dict[str, str]]:
     return entries
 
 
-def _managed_root(repo: Path) -> Path:
+def _managed_root(config: Config, repo: Path) -> Path:
     repo_hash = hashlib.sha256(str(repo).encode("utf-8")).hexdigest()[:12]
-    return repo.parent / ".mcp4chatgpt-worktrees" / f"{repo.name}-{repo_hash}"
+    return (
+        Path(config.data_dir).expanduser().resolve()
+        / "managed-worktrees"
+        / "checkouts"
+        / f"{repo.name}-{repo_hash}"
+    )
 
 
 def _fingerprint(repo: Path, base_commit: str) -> str:
@@ -174,29 +178,11 @@ def create_worktree(
     fingerprint = _fingerprint(repo, base_commit)
     store = _store(config)
 
-    with ExitStack() as locks:
-        locks.enter_context(store.operation_lock(operation_id))
-        if reservation_id != operation_id:
-            legacy = store.read_operation(operation_id)
-            if legacy is not None:
-                if legacy.get("fingerprint") != fingerprint:
-                    raise ValueError(
-                        "idempotency_conflict: operation_id already belongs to "
-                        "a different worktree request"
-                    )
-                worktree_id = str(legacy["worktree_id"])
-                try:
-                    record = store.read_record(worktree_id)
-                    return {
-                        **_observed_record(record),
-                        "replayed": True,
-                        "created": False,
-                        "recovered": False,
-                    }
-                except ValueError:
-                    pass
-            locks.enter_context(store.operation_lock(reservation_id))
-
+    # Scoped callers use the reservation id as the sole idempotency key.
+    # Do not probe the public operation id first: doing so would let an
+    # authenticated scoped request replay or conflict with legacy unscoped
+    # reservations created before principal/workspace scoping existed.
+    with store.operation_lock(reservation_id):
         existing = store.read_operation(reservation_id)
         if existing is not None:
             if existing.get("fingerprint") != fingerprint:
@@ -204,6 +190,13 @@ def create_worktree(
                     "idempotency_conflict: operation_id already belongs to "
                     "a different worktree request"
                 )
+
+            owner = (scope_metadata or {}).get("coding_task_key")
+            recorded_owner = (existing.get("scope") or {}).get("coding_task_key")
+            if recorded_owner is not None and recorded_owner != owner:
+                raise ValueError("worktree_operation_owner_conflict")
+            if owner is not None and recorded_owner is None:
+                store.update_operation(reservation_id, {"scope": scope_metadata})
 
             worktree_id = str(existing["worktree_id"])
             try:
@@ -254,6 +247,14 @@ def create_worktree(
                     "recovery": "explicit_repair_required",
                 }
 
+            if owner is not None:
+                with store.worktree_lock(worktree_id):
+                    record = store.read_record(worktree_id)
+                    if record.get("state") != "active":
+                        raise ValueError("coding_task_worktree_not_active")
+                    record["scope"] = scope_metadata
+                    store.write_record(record)
+
             return {
                 **_observed_record(record),
                 "replayed": True,
@@ -269,7 +270,7 @@ def create_worktree(
             )
 
         worktree_id = "wt_" + uuid.uuid4().hex[:24]
-        destination = (_managed_root(repo) / worktree_id).resolve()
+        destination = (_managed_root(config, repo) / worktree_id).resolve()
         created_at = _iso_now()
         store.reserve_operation(
             reservation_id=reservation_id,
@@ -462,6 +463,9 @@ def remove_worktree(
                 rec_ws = scope.get("workspace_id") if isinstance(scope, dict) else None
                 if rec_ws is not None and rec_ws != expected_workspace_id:
                     raise ValueError(f"worktree_not_found: {worktree_id}")
+
+        if (scope or {}).get("coding_task_key") or store.task_owns_worktree(worktree_id):
+            raise ValueError("worktree_in_use_by_coding_task")
 
         if record.get("state") == "removed":
             return {

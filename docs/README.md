@@ -2,7 +2,8 @@
 
 ## Current implementation and operation
 
-- [Roadmap P3a: Managed Git worktrees, 2026-09-29](42-p3-managed-worktrees-2026-09-29.md): managed detached worktrees for concurrent coding sessions, clean-source enforcement, principal scoping, and safe removal.
+- [Roadmap P3b core: Validated coding tasks, 2026-09-29](43-p3b-validated-coding-tasks-2026-09-29.md): isolated candidate commits, validation evidence and interruption reconciliation, CAS artifact publication, and explicit source-checkout integration; crash fault-injection acceptance remains pending.
+- [Roadmap P3a: Managed Git worktrees, 2026-09-29](42-p3-managed-worktrees-2026-09-29.md): repo-bound detached worktrees with strict principal/workspace scoping, MCP-owned checkout storage, cursor pagination, and safe removal.
 - [P5 HTTP downstream, 2026-09-29](40-p5-http-downstream-2026-09-29.md): reuse an existing `/mcp` through an allowlisted HTTP client, preserve MCP results, and enforce nested capability targets.
 - [Strict file operation MCP integration, 2026-09-29](39-strict-file-tool-integration-2026-09-29.md): registered strict write/patch/status/reconcile tools, identity and metadata limits, and rollout gates.
 

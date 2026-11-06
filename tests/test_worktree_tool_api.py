@@ -10,7 +10,7 @@ import pytest
 
 from mcp4chatgpt.audit import AuditLogger
 from mcp4chatgpt.tools import ToolRegistry
-from mcp4chatgpt.workspace import worktree_tool_api
+from mcp4chatgpt.workspace import worktree_tool_api, worktrees
 
 
 def _git(cwd: Path, *args: str) -> str:
@@ -74,26 +74,27 @@ def test_scoped_worktree_replay_and_principal_isolation() -> None:
         assert wt_replay["worktree_id"] == worktree_id
 
         # 3. Status checks
-        st_a = worktree_tool_api.status(config, {"worktree_id": worktree_id}, "client-a")
+        scoped_args = {"worktree_id": worktree_id, "cwd": repo_path}
+        st_a = worktree_tool_api.status(config, scoped_args, "client-a")
         assert st_a["worktree_id"] == worktree_id
         assert st_a["state"] == "active"
 
         # Client B cannot view Client A's worktree
         with pytest.raises(ValueError, match="worktree_not_found"):
-            worktree_tool_api.status(config, {"worktree_id": worktree_id}, "client-b")
+            worktree_tool_api.status(config, scoped_args, "client-b")
 
         # 4. List checks
-        list_a = worktree_tool_api.list_worktrees(config, {}, "client-a")
+        list_a = worktree_tool_api.list_worktrees(config, {"cwd": repo_path}, "client-a")
         assert any(w["worktree_id"] == worktree_id for w in list_a["worktrees"])
 
-        list_b = worktree_tool_api.list_worktrees(config, {}, "client-b")
+        list_b = worktree_tool_api.list_worktrees(config, {"cwd": repo_path}, "client-b")
         assert not any(w["worktree_id"] == worktree_id for w in list_b["worktrees"])
 
         # 5. Remove checks
         with pytest.raises(ValueError, match="worktree_not_found"):
-            worktree_tool_api.remove(config, {"worktree_id": worktree_id}, "client-b")
+            worktree_tool_api.remove(config, scoped_args, "client-b")
 
-        rm_a = worktree_tool_api.remove(config, {"worktree_id": worktree_id}, "client-a")
+        rm_a = worktree_tool_api.remove(config, scoped_args, "client-a")
         assert rm_a["removed"] is True
         assert rm_a["state"] == "removed"
 
@@ -159,7 +160,7 @@ def test_registry_call_tool_and_discovery_integration() -> None:
         # 4. Status via call_tool
         status_res = registry.call_tool(
             "local_worktree_status",
-            {"worktree_id": wt_id},
+            {"worktree_id": wt_id, "cwd": repo_path},
             client_id="client-test",
         )
         status_data = json.loads(status_res["content"][0]["text"])
@@ -169,7 +170,7 @@ def test_registry_call_tool_and_discovery_integration() -> None:
         # 5. List via call_tool
         list_res = registry.call_tool(
             "local_worktree_list",
-            {},
+            {"cwd": repo_path},
             client_id="client-test",
         )
         list_data = json.loads(list_res["content"][0]["text"])
@@ -178,7 +179,7 @@ def test_registry_call_tool_and_discovery_integration() -> None:
         # 6. Remove via call_tool
         rm_res = registry.call_tool(
             "local_worktree_remove",
-            {"worktree_id": wt_id},
+            {"worktree_id": wt_id, "cwd": repo_path},
             client_id="client-test",
         )
         rm_data = json.loads(rm_res["content"][0]["text"])
@@ -287,11 +288,7 @@ def test_cwd_workspace_authorization_and_filtering() -> None:
                 client_id="client-1",
             )
 
-        # List filtering by cwd
-        list_all = worktree_tool_api.list_worktrees(config, {}, client_id="client-1")
-        all_ids = [w["worktree_id"] for w in list_all["worktrees"]]
-        assert wt_a_id in all_ids and wt_b_id in all_ids
-
+        # List is repository-scoped and never aggregates across workspaces.
         list_repo_a = worktree_tool_api.list_worktrees(
             config,
             {"cwd": str(repo_a)},
@@ -300,6 +297,15 @@ def test_cwd_workspace_authorization_and_filtering() -> None:
         a_ids = [w["worktree_id"] for w in list_repo_a["worktrees"]]
         assert wt_a_id in a_ids
         assert wt_b_id not in a_ids
+
+        list_repo_b = worktree_tool_api.list_worktrees(
+            config,
+            {"cwd": str(repo_b)},
+            client_id="client-1",
+        )
+        b_ids = [w["worktree_id"] for w in list_repo_b["worktrees"]]
+        assert wt_b_id in b_ids
+        assert wt_a_id not in b_ids
 
 
 def test_legacy_unscoped_records_isolated_from_mcp_api() -> None:
@@ -320,38 +326,48 @@ def test_legacy_unscoped_records_isolated_from_mcp_api() -> None:
             tool_exposure="compact",
             computer_mode="off",
         )
+        repo_path = str(repo)
 
-        from mcp4chatgpt.workspace.worktree_store import WorktreeStore
-        from mcp4chatgpt.workspace import worktrees
+        # Create a real pre-scoping reservation and record through the low-level API.
+        legacy = worktrees.create_worktree(
+            config,
+            operation_id="legacy-op",
+            cwd=repo_path,
+        )
+        legacy_id = legacy["worktree_id"]
+        assert "scope" not in legacy
 
-        store = WorktreeStore(Path(config.data_dir) / "managed-worktrees")
-        legacy_id = "wt_" + "0" * 24
-        store.write_record({
-            "schema_version": 1,
-            "worktree_id": legacy_id,
-            "operation_id": "legacy-op",
-            "fingerprint": "fp",
-            "source_repo": str(repo),
-            "path": str(tmp / "wt_legacy"),
-            "base_commit": "abc",
-            "base_ref": "HEAD",
-            "state": "active",
-            "created_at": "2026-09-01T00:00:00Z",
-            # No 'scope' field
-        })
+        # The authenticated create path must not replay the public legacy
+        # reservation even when operation_id, repository, and base commit match.
+        scoped = worktree_tool_api.create(
+            config,
+            {"operation_id": "legacy-op", "cwd": repo_path},
+            client_id="client-1",
+        )
+        assert scoped["created"] is True
+        assert scoped["worktree_id"] != legacy_id
+        assert scoped["scope"]["principal_hash"]
 
-        # Authenticated MCP API rejects legacy unscoped record
+        scoped_args = {"worktree_id": legacy_id, "cwd": repo_path}
+
+        # Authenticated MCP API rejects legacy unscoped records for every read or mutation.
         with pytest.raises(ValueError, match="worktree_not_found"):
-            worktree_tool_api.status(config, {"worktree_id": legacy_id}, client_id="client-1")
+            worktree_tool_api.status(config, scoped_args, client_id="client-1")
 
         with pytest.raises(ValueError, match="worktree_not_found"):
-            worktree_tool_api.remove(config, {"worktree_id": legacy_id}, client_id="client-1")
+            worktree_tool_api.remove(config, scoped_args, client_id="client-1")
 
-        # Excluded from list in authenticated API
-        list_res = worktree_tool_api.list_worktrees(config, {}, client_id="client-1")
-        assert not any(w["worktree_id"] == legacy_id for w in list_res["worktrees"])
+        # Excluded from repository-scoped list in the authenticated API.
+        list_res = worktree_tool_api.list_worktrees(
+            config,
+            {"cwd": repo_path},
+            client_id="client-1",
+        )
+        listed_ids = {w["worktree_id"] for w in list_res["worktrees"]}
+        assert legacy_id not in listed_ids
+        assert scoped["worktree_id"] in listed_ids
 
-        # Low-level internal function can still inspect it for maintenance/migration
+        # Low-level internal function can still inspect it for maintenance/migration.
         low_level_st = worktrees.worktree_status(config, legacy_id, strict_scope=False)
         assert low_level_st["worktree_id"] == legacy_id
 
@@ -367,7 +383,11 @@ def test_cursor_pagination_contract() -> None:
         wt3 = worktree_tool_api.create(config, {"operation_id": "page-3", "cwd": repo_path}, client_id="client-1")
 
         # Page 1: limit = 2
-        p1 = worktree_tool_api.list_worktrees(config, {"limit": 2}, client_id="client-1")
+        p1 = worktree_tool_api.list_worktrees(
+            config,
+            {"cwd": repo_path, "limit": 2},
+            client_id="client-1",
+        )
         assert len(p1["worktrees"]) == 2
         assert p1["has_more"] is True
         assert p1["next_cursor"] is not None
@@ -375,7 +395,7 @@ def test_cursor_pagination_contract() -> None:
         # Page 2: limit = 2 with cursor
         p2 = worktree_tool_api.list_worktrees(
             config,
-            {"limit": 2, "cursor": p1["next_cursor"]},
+            {"cwd": repo_path, "limit": 2, "cursor": p1["next_cursor"]},
             client_id="client-1",
         )
         assert len(p2["worktrees"]) == 1
@@ -392,7 +412,7 @@ def test_cursor_pagination_contract() -> None:
         with pytest.raises(ValueError, match="invalid_cursor"):
             worktree_tool_api.list_worktrees(
                 config,
-                {"cursor": "wt_nonexistent0000000000"},
+                {"cwd": repo_path, "cursor": "wt_nonexistent0000000000"},
                 client_id="client-1",
             )
 

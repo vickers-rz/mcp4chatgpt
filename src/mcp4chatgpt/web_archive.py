@@ -12,14 +12,18 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import http.client
+import socket
+import ssl
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit, urlunsplit, urljoin
 
 from .config import Config
 from .knowledge_ops import _chunk_text
 from .retrieval import fts5_query, indexed_text, unique_terms
-from .safety import response_truncate
+from .safety import response_truncate, validate_research_url, _strict_research_network_enabled
 
 _DB_INIT_LOCK = threading.RLock()
 
@@ -174,6 +178,58 @@ def _attachment_name(candidate: dict[str, Any], index: int) -> str:
     return (name or f"attachment-{index + 1}")[:180]
 
 
+@contextmanager
+def _strict_attachment_response(url: str, headers: dict[str, str]):
+    for _ in range(10):
+        validate_research_url(url, resolve_dns=False)
+        parsed = urlsplit(url)
+        host = parsed.hostname
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        infos = socket.getaddrinfo(host, port, type=socket.SOCK_STREAM)
+        addresses = {info[4][0] for info in infos if info[4]}
+        validate_research_url(url, resolved_addresses=addresses)
+        if not infos:
+            raise ValueError("Attachment host did not resolve")
+        sock = None
+        last_error = None
+        for family, socktype, protocol, _, sockaddr in infos:
+            candidate = socket.socket(family, socktype, protocol)
+            try:
+                candidate.settimeout(30)
+                candidate.connect(sockaddr)
+                sock = candidate
+                break
+            except OSError as exc:
+                last_error = exc
+                candidate.close()
+        if sock is None:
+            raise last_error or OSError("Attachment connection failed")
+        conn = http.client.HTTPConnection(host, port, timeout=30)
+        try:
+            if parsed.scheme == "https":
+                sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+            conn.sock = sock
+            path = parsed.path or "/"
+            if parsed.query:
+                path += "?" + parsed.query
+            conn.request("GET", path, headers=headers)
+            response = conn.getresponse()
+            if response.status in {301, 302, 303, 307, 308}:
+                location = response.getheader("Location")
+                if not location:
+                    raise ValueError("Attachment redirect missing Location")
+                url = urljoin(url, location)
+                continue
+            if response.status >= 400:
+                raise ValueError(f"Attachment HTTP {response.status}")
+            yield response
+            return
+        finally:
+            conn.close()
+            sock.close()
+    raise ValueError("Too many attachment redirects")
+
+
 def _download_attachment(url: str, destination: Path, *, referer: str, max_bytes: int) -> dict[str, Any]:
     request = urllib.request.Request(
         url,
@@ -184,7 +240,10 @@ def _download_attachment(url: str, destination: Path, *, referer: str, max_bytes
         },
     )
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        validate_research_url(url, resolve_dns=False)
+        opening = (_strict_attachment_response(url, dict(request.header_items()))
+                   if _strict_research_network_enabled() else urllib.request.urlopen(request, timeout=30))
+        with opening as response:
             content_type = str(response.headers.get("Content-Type") or "").split(";", 1)[0].strip()
             declared = response.headers.get("Content-Length")
             if declared and int(declared) > max_bytes:
@@ -206,7 +265,7 @@ def _download_attachment(url: str, destination: Path, *, referer: str, max_bytes
             _atomic_write_bytes(destination, b"".join(chunks))
             return {"status": "saved", "content_type": content_type,
                     "size_bytes": total, "content_hash": digest.hexdigest(), "local_path": str(destination)}
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as exc:
         return {"status": "failed", "content_type": mimetypes.guess_type(destination.name)[0] or "",
                 "size_bytes": None, "error": str(exc)}
 

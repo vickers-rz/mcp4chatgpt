@@ -197,6 +197,8 @@ MCP endpoint:
 
 During OAuth authorization, enter `MCP_AUTH_SECRET` on the local approval form.
 
+Dynamic registration defaults to `client_secret_post`. Existing clients must send their registered client secret when exchanging a code. Clients that cannot retain a secret can re-register explicitly with `token_endpoint_auth_method: none` and use S256 PKCE. Existing bearer tokens remain valid until their normal expiry.
+
 ### Refreshing ChatGPT tool actions after server changes
 
 ChatGPT keeps an app-side snapshot of the MCP tool/action definitions it has
@@ -405,6 +407,6 @@ login background item unless you explicitly install and modify it.
 
 This is a full local-ops server. It can read/write allowed files and run allowed commands. Keep it behind OAuth and HTTPS. Set `MCP_ALLOWED_ROOTS` narrowly. The HTTP server rejects unknown `Host` headers by default; use `MCP_ALLOWED_HOSTS` only for additional trusted reverse-proxy hostnames.
 
-Browser research tools are intentionally operator-trusted by default on this self-hosted, on-demand MCP. They may navigate directly to localhost, RFC1918/private IPs, CGNAT/Tailscale-style addresses, `.local` names, and single-label intranet hosts. Set `MCP_BROWSER_RESEARCH_STRICT_NETWORK=1` only if you want the older restrictive network preflight; `MCP_BROWSER_RESEARCH_ALLOW_HOSTS` remains available as an exception list in that strict mode.
+Browser research tools are intentionally operator-trusted by default on this self-hosted, on-demand MCP. They may navigate directly to localhost, RFC1918/private IPs, CGNAT/Tailscale-style addresses, `.local` names, and single-label intranet hosts. Set `MCP_BROWSER_RESEARCH_STRICT_NETWORK=1` only if you want the older restrictive network preflight; `MCP_BROWSER_RESEARCH_ALLOW_HOSTS` remains available as an exception list in that strict mode. Strict-mode archive attachments validate every redirect and use direct connections pinned to a checked DNS address.
 
 co-te tools reuse `/Users/vickers/Documents/MCP_Creator/codex_work_with_apps/co-te.py`; macOS Automation, Accessibility, and Apple Notes Full Disk Access permissions still apply to the process running this server.

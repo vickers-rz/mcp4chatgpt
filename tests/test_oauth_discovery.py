@@ -7,6 +7,7 @@ import json
 import threading
 import urllib.error
 import urllib.request
+import pytest
 from dataclasses import replace
 from urllib.parse import parse_qs, urlencode, urlparse
 
@@ -93,7 +94,8 @@ def _post_http(host: str, port: int, path: str, body: bytes, content_type: str):
         conn.close()
 
 
-def test_http_oauth_dynamic_registration_pkce_and_bearer_roundtrip(tmp_path):
+@pytest.mark.parametrize("auth_method", ["client_secret_post", "none"])
+def test_http_oauth_dynamic_registration_pkce_and_bearer_roundtrip(tmp_path, auth_method):
     config = make_config(tmp_path)
     server = create_server(config)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -101,7 +103,7 @@ def test_http_oauth_dynamic_registration_pkce_and_bearer_roundtrip(tmp_path):
     host, port = server.server_address
 
     redirect_uri = "https://chat.openai.com/aip/callback"
-    verifier = "chatgpt-oauth-pkce-verifier"
+    verifier = "chatgpt-oauth-pkce-verifier-" + "x" * 32
     challenge = base64.urlsafe_b64encode(
         hashlib.sha256(verifier.encode("utf-8")).digest()
     ).decode("ascii").rstrip("=")
@@ -110,6 +112,7 @@ def test_http_oauth_dynamic_registration_pkce_and_bearer_roundtrip(tmp_path):
         registration_body = json.dumps({
             "client_name": "ChatGPT",
             "redirect_uris": [redirect_uri],
+            "token_endpoint_auth_method": auth_method,
         }).encode("utf-8")
         status, _, body = _post_http(
             host,
@@ -151,6 +154,7 @@ def test_http_oauth_dynamic_registration_pkce_and_bearer_roundtrip(tmp_path):
             "grant_type": "authorization_code",
             "code": code,
             "client_id": client_id,
+            **({"client_secret": client["client_secret"]} if auth_method == "client_secret_post" else {}),
             "code_verifier": verifier,
             "redirect_uri": redirect_uri,
             "resource": config.mcp_url,

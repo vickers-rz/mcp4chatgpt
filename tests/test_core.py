@@ -797,7 +797,7 @@ class CoreTests(unittest.TestCase):
                 "redirect_uri": "https://chat.openai.com/aip/callback",
                 "created_at": time.time(),
             }
-            token = issue_token(config, {"code": code, "client_id": client["client_id"]})["access_token"]
+            token = issue_token(config, {"code": code, "client_id": client["client_id"], "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://chat.openai.com/aip/callback"})["access_token"]
             self.assertEqual(verify_token(config, token), client["client_id"])
 
     def test_oauth_register_rejects_invalid_redirect_uris(self) -> None:
@@ -816,7 +816,8 @@ class CoreTests(unittest.TestCase):
             from mcp4chatgpt import oauth
 
             code = "concurrent-code"
-            client_id = "client-test"
+            client = register_client(config, {"redirect_uris": ["https://chat.openai.com/aip/callback"]})
+            client_id = client["client_id"]
             oauth.AUTH_CODES[code] = {
                 "client_id": client_id,
                 "redirect_uri": "https://chat.openai.com/aip/callback",
@@ -827,7 +828,7 @@ class CoreTests(unittest.TestCase):
 
             def consume() -> None:
                 try:
-                    successes.append(issue_token(config, {"code": code, "client_id": client_id}))
+                    successes.append(issue_token(config, {"code": code, "client_id": client_id, "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://chat.openai.com/aip/callback"}))
                 except ValueError as exc:
                     failures.append(str(exc))
 
@@ -878,34 +879,38 @@ class CoreTests(unittest.TestCase):
             config = make_config(Path(d))
             from mcp4chatgpt import oauth
 
+            client = register_client(config, {"redirect_uris": ["https://chat.openai.com/aip/callback"]})
             code = "expired-code"
             oauth.AUTH_CODES[code] = {
-                "client_id": "client-test",
+                "client_id": client["client_id"],
                 "redirect_uri": "https://chat.openai.com/aip/callback",
                 "created_at": 0,  # epoch 0 → always expired
             }
             with self.assertRaises(ValueError) as ctx:
-                issue_token(config, {"code": code, "client_id": "client-test"})
+                issue_token(config, {"code": code, "client_id": client["client_id"], "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://chat.openai.com/aip/callback"})
             self.assertIn("expired", str(ctx.exception).lower())
             # Expired code must have been consumed; a second attempt must fail too.
             with self.assertRaises(ValueError):
-                issue_token(config, {"code": code, "client_id": "client-test"})
+                issue_token(config, {"code": code, "client_id": client["client_id"], "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://chat.openai.com/aip/callback"})
 
     def test_oauth_pkce_requires_verifier(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
             from mcp4chatgpt import oauth
-
+            redirect = "https://chat.openai.com/aip/callback"
+            client = register_client(config, {"redirect_uris": [redirect]})
             code = "pkce-code"
             oauth.AUTH_CODES[code] = {
-                "client_id": "client-test",
-                "redirect_uri": "https://chat.openai.com/aip/callback",
-                "code_challenge": "challenge",
-                "code_challenge_method": "plain",
-                "created_at": 9999999999,
+                "client_id": client["client_id"], "redirect_uri": redirect,
+                "code_challenge": "challenge", "code_challenge_method": "plain",
+                "created_at": time.time(),
             }
-            with self.assertRaises(ValueError):
-                issue_token(config, {"code": code, "client_id": "client-test"})
+            request = {"code": code, "client_id": client["client_id"],
+                       "client_secret": client["client_secret"], "redirect_uri": redirect,
+                       "grant_type": "authorization_code"}
+            with self.assertRaisesRegex(ValueError, "code_verifier"):
+                issue_token(config, request)
+            self.assertTrue(issue_token(config, {**request, "code_verifier": "challenge"})["access_token"])
 
     def test_chunk_overlap_is_capped(self) -> None:
         from mcp4chatgpt.knowledge_ops import _chunk_text

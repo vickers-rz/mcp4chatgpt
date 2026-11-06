@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 import tempfile
 import unittest
 from pathlib import Path
@@ -181,6 +182,65 @@ class WorkspaceWorktreeTests(unittest.TestCase):
         ids = [w["worktree_id"] for w in listed["worktrees"]]
         self.assertIn(wt1["worktree_id"], ids)
         self.assertIn(wt2["worktree_id"], ids)
+
+    def test_managed_checkout_uses_internal_data_dir_not_repo_parent(self) -> None:
+        strict_config = SimpleNamespace(
+            allowed_roots=[self.repo_dir],
+            data_dir=self.tmp / "internal-data",
+            local_auth_disabled=True,
+        )
+        res = worktrees.create_worktree(
+            strict_config,
+            operation_id="op_wt_internal_root",
+            cwd=str(self.repo_dir),
+        )
+        wt_path = Path(res["path"]).resolve()
+        managed_root = (Path(strict_config.data_dir) / "managed-worktrees" / "checkouts").resolve()
+
+        self.assertTrue(wt_path.is_relative_to(managed_root))
+        self.assertFalse(
+            wt_path.is_relative_to(
+                (self.repo_dir.parent / ".mcp4chatgpt-worktrees").resolve()
+            )
+        )
+        self.assertTrue(wt_path.exists())
+        self.assertEqual(_git(self.repo_dir, "status", "--porcelain=v1"), "")
+
+    def test_data_dir_inside_ignored_source_repo_remains_clean(self) -> None:
+        (self.repo_dir / ".gitignore").write_text("data/\n", encoding="utf-8")
+        _git(self.repo_dir, "add", ".gitignore")
+        _git(self.repo_dir, "commit", "-m", "Ignore runtime data")
+
+        embedded_config = SimpleNamespace(
+            allowed_roots=[self.repo_dir],
+            data_dir=self.repo_dir / "data",
+            local_auth_disabled=True,
+        )
+        res = worktrees.create_worktree(
+            embedded_config,
+            operation_id="op_wt_embedded_data",
+            cwd=str(self.repo_dir),
+        )
+
+        embedded_data_root = (self.repo_dir / "data").resolve()
+        self.assertTrue(Path(res["path"]).resolve().is_relative_to(embedded_data_root))
+        self.assertEqual(_git(self.repo_dir, "status", "--porcelain=v1"), "")
+
+    def test_concurrent_same_operation_replays_single_worktree(self) -> None:
+        def create() -> dict:
+            return worktrees.create_worktree(
+                self.config,
+                operation_id="op_wt_race",
+                cwd=str(self.repo_dir),
+            )
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda _: create(), range(8)))
+
+        ids = {result["worktree_id"] for result in results}
+        self.assertEqual(len(ids), 1)
+        self.assertEqual(sum(bool(result["created"]) for result in results), 1)
+        self.assertEqual(sum(bool(result["replayed"]) for result in results), 7)
 
 
 if __name__ == "__main__":

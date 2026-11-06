@@ -94,7 +94,7 @@ def _strict_research_network_enabled() -> bool:
     }
 
 
-def validate_research_url(url: str, *, resolve_dns: bool = True) -> str:
+def validate_research_url(url: str, *, resolve_dns: bool = True, resolved_addresses: set[str] | None = None) -> str:
     """Validate a URL used by browser research tools.
 
     This self-hosted MCP defaults to operator-trusted network access: public sites,
@@ -130,11 +130,14 @@ def validate_research_url(url: str, *, resolve_dns: bool = True) -> str:
         return url
 
     if resolve_dns:
-        try:
-            infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
-        except socket.gaierror as exc:
-            raise ValueError(f"Could not resolve research target host: {host}") from exc
-        addresses = {info[4][0] for info in infos if info[4]}
+        if resolved_addresses is None:
+            try:
+                infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+            except socket.gaierror as exc:
+                raise ValueError(f"Could not resolve research target host: {host}") from exc
+            addresses = {info[4][0] for info in infos if info[4]}
+        else:
+            addresses = resolved_addresses
         if not addresses:
             raise ValueError(f"Could not resolve research target host: {host}")
         fake_ip_v4 = ipaddress.ip_network("198.18.0.0/15")

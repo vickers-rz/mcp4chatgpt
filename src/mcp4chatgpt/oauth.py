@@ -7,6 +7,7 @@ import json
 import fcntl
 import os
 import secrets
+import re
 import threading
 import tempfile
 import time
@@ -148,12 +149,16 @@ def register_client(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(redirect_uris, list) or not all(isinstance(uri, str) for uri in redirect_uris):
         raise ValueError("redirect_uris must be a list of strings.")
     client_id = "client_" + secrets.token_urlsafe(18)
-    client_secret = secrets.token_urlsafe(32)
+    auth_method = payload.get("token_endpoint_auth_method", "client_secret_post")
+    if auth_method not in {"none", "client_secret_post"}:
+        raise ValueError("Unsupported token_endpoint_auth_method.")
+    client_secret = secrets.token_urlsafe(32) if auth_method == "client_secret_post" else None
     with _clients_write_lock(config):
         clients = _load_clients(config)
         clients[client_id] = {
             "client_id": client_id,
             "client_secret": client_secret,
+            "token_endpoint_auth_method": auth_method,
             "client_name": payload.get("client_name", "ChatGPT"),
             "redirect_uris": redirect_uris,
             "created_at": time.time(),
@@ -161,11 +166,10 @@ def register_client(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
         _save_clients(config, clients)
     return {
         "client_id": client_id,
-        "client_secret": client_secret,
+        **({"client_secret": client_secret, "client_secret_expires_at": 0} if client_secret else {}),
         "client_id_issued_at": int(time.time()),
-        "client_secret_expires_at": 0,
         "redirect_uris": clients[client_id]["redirect_uris"],
-        "token_endpoint_auth_method": "client_secret_post",
+        "token_endpoint_auth_method": auth_method,
         "grant_types": ["authorization_code"],
         "response_types": ["code"],
     }
@@ -226,6 +230,10 @@ def create_auth_redirect(config: Config, params: dict[str, str], admin_secret: s
         raise ValueError("Unknown OAuth client.")
     if client.get("redirect_uris") and redirect_uri not in client["redirect_uris"]:
         raise ValueError("redirect_uri is not registered for this client.")
+    if client.get("token_endpoint_auth_method", "client_secret_post") == "none":
+        challenge = params.get("code_challenge", "")
+        if params.get("code_challenge_method") != "S256" or not re.fullmatch(r"[A-Za-z0-9_-]{43}", challenge):
+            raise ValueError("Public clients require an S256 PKCE challenge.")
     with AUTH_CODES_LOCK:
         _cleanup_expired_codes()
         if len(AUTH_CODES) >= MAX_AUTH_CODES:
@@ -248,8 +256,19 @@ def create_auth_redirect(config: Config, params: dict[str, str], admin_secret: s
 def issue_token(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
     code = payload.get("code", "")
     client_id = payload.get("client_id", "")
-    # Use get() first so we can distinguish "unknown code" from "expired code"
-    # before removing the entry.  _cleanup runs after to purge other stale codes.
+    if payload.get("grant_type") != "authorization_code":
+        raise ValueError("Unsupported grant_type.")
+    client = _load_clients(config).get(client_id)
+    if not isinstance(client, dict):
+        raise ValueError("Invalid client.")
+    auth_method = client.get("token_endpoint_auth_method", "client_secret_post")
+    if auth_method == "client_secret_post":
+        provided = payload.get("client_secret")
+        stored = client.get("client_secret")
+        if not isinstance(provided, str) or not isinstance(stored, str) or not hmac.compare_digest(provided.encode(), stored.encode()):
+            raise ValueError("Invalid client secret.")
+    elif auth_method != "none":
+        raise ValueError("Unsupported client authentication method.")
     with AUTH_CODES_LOCK:
         record = AUTH_CODES.get(code)
         if not record or record["client_id"] != client_id:
@@ -257,26 +276,28 @@ def issue_token(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
         if time.time() - float(record.get("created_at", 0)) > AUTH_CODE_TTL_SECONDS:
             AUTH_CODES.pop(code, None)
             raise ValueError("Authorization code has expired.")
-        AUTH_CODES.pop(code, None)  # consume — single use
-        _cleanup_expired_codes()    # opportunistic cleanup of other stale codes
-    resource = str(record.get("resource") or "")
-    requested_resource = str(payload.get("resource") or "")
-    if resource:
-        if not requested_resource or requested_resource != resource:
+        if payload.get("redirect_uri") != record["redirect_uri"]:
+            raise ValueError("redirect_uri must match the authorization request.")
+        resource = str(record.get("resource") or "")
+        if resource and (payload.get("resource") != resource or resource != config.mcp_url):
             raise ValueError("resource must match the authorization request.")
-        if resource != config.mcp_url:
-            raise ValueError("resource does not match this MCP server.")
-    verifier = payload.get("code_verifier")
-    challenge = record.get("code_challenge")
-    if challenge:
-        if not verifier:
-            raise ValueError("code_verifier is required when code_challenge was set.")
+        verifier = payload.get("code_verifier")
+        challenge = record.get("code_challenge")
         method = record.get("code_challenge_method", "plain")
-        if method not in {"plain", "S256"}:
-            raise ValueError("Unsupported code_challenge_method.")
-        expected = _b64(hashlib.sha256(verifier.encode("utf-8")).digest()) if method == "S256" else verifier
-        if not hmac.compare_digest(expected, challenge):
-            raise ValueError("Invalid PKCE verifier.")
+        if auth_method == "none" and (not challenge or method != "S256"):
+            raise ValueError("Public clients require S256 PKCE.")
+        if challenge:
+            if not isinstance(verifier, str) or not verifier:
+                raise ValueError("code_verifier is required when code_challenge was set.")
+            if method not in {"plain", "S256"}:
+                raise ValueError("Unsupported code_challenge_method.")
+            if auth_method == "none" and not re.fullmatch(r"[A-Za-z0-9._~-]{43,128}", verifier):
+                raise ValueError("Invalid PKCE verifier format.")
+            expected = _b64(hashlib.sha256(verifier.encode("utf-8")).digest()) if method == "S256" else verifier
+            if not hmac.compare_digest(expected.encode(), str(challenge).encode()):
+                raise ValueError("Invalid PKCE verifier.")
+        AUTH_CODES.pop(code)
+        _cleanup_expired_codes()
     now = int(time.time())
     claims = {"sub": client_id, "iat": now, "exp": now + 86400}
     if resource:

@@ -22,8 +22,14 @@ class WorktreeStore:
         self.root = root
         self.records_dir = root / "records"
         self.operations_dir = root / "operations"
+        self.tasks_dir = root / "tasks"
         self.locks_dir = root / "locks"
-        for path in (self.records_dir, self.operations_dir, self.locks_dir):
+        for path in (
+            self.records_dir,
+            self.operations_dir,
+            self.tasks_dir,
+            self.locks_dir,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -37,11 +43,30 @@ class WorktreeStore:
     def _operation_key(operation_id: str) -> str:
         return hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def task_key(*, principal_hash: str, workspace_id: str, task_id: str) -> str:
+        payload = json.dumps(
+            [principal_hash, workspace_id, task_id],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(payload).hexdigest()
+
+    @staticmethod
+    def _validate_task_key(task_key: str) -> str:
+        value = str(task_key)
+        if len(value) != 64 or any(ch not in "0123456789abcdef" for ch in value):
+            raise ValueError("invalid_coding_task_key")
+        return value
+
     def _record_path(self, worktree_id: str) -> Path:
         return self.records_dir / f"{self.validate_worktree_id(worktree_id)}.json"
 
     def _operation_path(self, operation_id: str) -> Path:
         return self.operations_dir / f"{self._operation_key(operation_id)}.json"
+
+    def _task_path(self, task_key: str) -> Path:
+        return self.tasks_dir / f"{self._validate_task_key(task_key)}.json"
 
     @contextmanager
     def _lock(self, namespace: str, value: str) -> Iterator[None]:
@@ -59,6 +84,9 @@ class WorktreeStore:
 
     def worktree_lock(self, worktree_id: str):
         return self._lock("worktree", self.validate_worktree_id(worktree_id))
+
+    def task_lock(self, task_key: str):
+        return self._lock("coding-task", self._validate_task_key(task_key))
 
     @staticmethod
     def _read_json(path: Path) -> dict[str, Any] | None:
@@ -128,6 +156,20 @@ class WorktreeStore:
         value.update(updates)
         self._write_json(self._operation_path(operation_id), value)
         return value
+
+    def task_owns_worktree(self, worktree_id: str) -> bool:
+        for path in self.tasks_dir.glob("*.json"):
+            record = self._read_json(path)
+            if record is not None and record.get("worktree_id") == worktree_id:
+                return True
+        return False
+
+    def read_task(self, task_key: str) -> dict[str, Any] | None:
+        return self._read_json(self._task_path(task_key))
+
+    def write_task(self, task_key: str, record: dict[str, Any]) -> dict[str, Any]:
+        self._write_json(self._task_path(task_key), record)
+        return record
 
     def read_record(self, worktree_id: str) -> dict[str, Any]:
         value = self._read_json(self._record_path(worktree_id))
