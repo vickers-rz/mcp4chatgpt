@@ -263,7 +263,13 @@ class ExtensionJobManager:
             if isinstance(value, list):
                 return [clean(item) for item in value]
             if isinstance(value, dict):
-                return {key: clean(item) for key, item in value.items()}
+                cleaned = {}
+                for key, item in value.items():
+                    cleaned_key = response_redact(self, key)
+                    if cleaned_key in cleaned:
+                        raise ExtJobError("ext_job_result_redaction_key_collision")
+                    cleaned[cleaned_key] = clean(item)
+                return cleaned
             return value
 
         return clean(result)
