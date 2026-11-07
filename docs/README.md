@@ -53,6 +53,7 @@
 
 ## Plans and handoffs
 
+- [ChatGPT Extensions integration plan, 2026-10-01](44-chatgpt-extensions-plan-2026-10-01.md): accepted roadmap addition after existing reliability acceptance; start with a read-only Coding Task conversation panel, then evaluate mentions, file viewers, and sidebar/settings. Planned, not implemented.
 - [Codex P4A Personal Skill E2E handoff, 2026-09-29](37-codex-handoff-personal-skill-p4a-e2e-2026-09-29.md): concrete real-ChatGPT acceptance matrix for browser search, logged-in session, structured failure states, activation boundaries, and fresh tab handles.
 - [Mac GUI automation handoff plan](09-gemini-handoff-macos-gui-plan.md)
 - [Coding capability handoff plan](10-gemini-handoff-codexpro-coding-plan.md)
