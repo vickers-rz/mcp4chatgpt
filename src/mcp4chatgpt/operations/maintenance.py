@@ -32,6 +32,7 @@ def prune_images(store: OperationStore, state_dir: Path, key: OperationKey, *,
     if not artifact.is_dir():
         return {"operation_id": key.operation_id, "eligible": False, "reason": "no_artifact"}
     lock_path = state_dir / "operation-locks" / hashlib.sha256(key.encoded().encode()).hexdigest()
+    lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     fd = os.open(lock_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     try:
         fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)

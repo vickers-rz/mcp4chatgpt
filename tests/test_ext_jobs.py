@@ -358,3 +358,26 @@ class TestExtOpsAndToolRegistry:
         audit_text = audit_path.read_text(encoding="utf-8").replace(" ", "")
         assert '"channel":"extension"' in audit_text
         assert "completed" not in audit_text
+
+
+@pytest.mark.parametrize("full_access", [False, True])
+def test_result_redaction_and_bounded_preview(tmp_path, monkeypatch, full_access):
+    fake = FakeBridge()
+    secret = "sk-" + "a" * 48
+    fake.batch_payloads = [{"done": True, "records": [{"value": secret}],
+                            "result": {"value": secret, "padding": "x" * 2000}}]
+    install_fake_bridge(monkeypatch, fake)
+    manager = ExtensionJobManager(tmp_path, personal_full_access=full_access)
+    job = manager.start_js_job(code="(c, i) => ({done:true})", batch_timeout_sec=2)
+    wait_terminal(manager, job["job_id"])
+    original = Path.read_text
+
+    def no_full_result_read(path, *args, **kwargs):
+        assert path != manager._result_path(job["job_id"])
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", no_full_result_read)
+    result = manager.get_job_result(job["job_id"], max_chars=500)
+    assert result["result_truncated"]
+    assert (secret in json.dumps(result["records"])) is full_access
+    assert (secret in result["result_preview"]) is full_access

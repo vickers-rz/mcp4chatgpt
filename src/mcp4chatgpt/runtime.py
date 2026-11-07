@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from . import ext_bridge
 from .config import load_config
 from .downstream.manager import DownstreamMCPManager
-from .server import Handler, create_server
+from .server import Handler, create_server, _host_allowed, _json_response
 
 
 class RuntimeHandler(Handler):
@@ -28,6 +28,10 @@ class RuntimeHandler(Handler):
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         if urlparse(self.path).path != "/health":
             super().do_GET()
+            return
+
+        if not _host_allowed(self, self.server.config):
+            _json_response(self, 421, {"error": "Invalid Host header."})
             return
 
         payload: dict[str, object] = {

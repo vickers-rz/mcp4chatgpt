@@ -281,6 +281,10 @@ def issue_token(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
         resource = str(record.get("resource") or "")
         if resource and (payload.get("resource") != resource or resource != config.mcp_url):
             raise ValueError("resource must match the authorization request.")
+        requested_resource = payload.get("resource")
+        if requested_resource and requested_resource != config.mcp_url:
+            raise ValueError("Invalid token resource.")
+        resource = resource or requested_resource or ""
         verifier = payload.get("code_verifier")
         challenge = record.get("code_challenge")
         method = record.get("code_challenge_method", "plain")
@@ -319,4 +323,6 @@ def verify_token(config: Config, token: str) -> str:
     claims = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
     if int(claims.get("exp", 0)) < int(time.time()):
         raise ValueError("Bearer token expired.")
+    if claims.get("aud") is not None and claims["aud"] != config.mcp_url:
+        raise ValueError("Invalid bearer token audience.")
     return str(claims.get("sub", ""))

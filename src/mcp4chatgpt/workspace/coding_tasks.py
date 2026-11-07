@@ -290,6 +290,8 @@ def task_file(
         worktree_id = task["worktree_id"]
         with store.worktree_lock(worktree_id):
             record = store.read_record(worktree_id)
+            if record is None:
+                raise ValueError("coding_task_worktree_not_active")
             scope = record.get("scope") or {}
             if (scope.get("coding_task_key", key) != key
                     or record["source_repo"] != str(repo)
@@ -435,6 +437,8 @@ def create_task(
                     raise ValueError("coding_task_worktree_owner_mismatch")
                 with store.worktree_lock(worktree_id):
                     record = store.read_record(worktree_id)
+                    if record is None:
+                        raise ValueError("coding_task_worktree_not_active")
                     owner_scope = {**scope_metadata, "coding_task_key": task_key}
                     for item in (reservation, record):
                         if item is not None:
@@ -657,6 +661,10 @@ def _validation_group_alive(pgid: int) -> bool:
         os.killpg(pgid, 0)
     except ProcessLookupError:
         return False
+    except PermissionError:
+        # macOS can deny signals to a zombie-only group. Inspect membership
+        # below instead of interpreting signal permission as liveness.
+        pass
     # Zombies cannot write files or hold log descriptors. A failed process
     # query must propagate rather than being interpreted as an empty group.
     listing = subprocess.run(

@@ -44,10 +44,12 @@ _CATEGORY_MEMBERS: dict[str, frozenset[str]] = {
     "files": frozenset({
         "local_list_files", "local_read_text", "local_expose_file",
         "local_write_file", "local_apply_patch",
+        "local_strict_write_file", "local_strict_apply_patch",
+        "local_operation_status", "local_operation_reconcile",
     }),
     "jobs": frozenset({
         "local_start_job", "local_job_status", "local_job_logs",
-        "local_list_jobs", "local_cancel_job",
+        "local_list_jobs", "local_cancel_job", "local_job_operation_status",
         "ext_start_js_job", "ext_get_job", "ext_get_job_result", "ext_cancel_job",
     }),
     "shell": frozenset({
@@ -79,6 +81,14 @@ _CATEGORY_MEMBERS: dict[str, frozenset[str]] = {
 
 
 _KEYWORDS: dict[str, tuple[str, ...]] = {
+    "local_strict_write_file": ('strict', 'write', '严格写入', '幂等写入'),
+    "local_strict_apply_patch": ('file', 'patch', 'strict', '文件', '补丁'),
+    "local_operation_status": ('operation', 'status', '操作', '状态'),
+    "local_operation_reconcile": ('operation', 'recovery', 'reconcile', '操作', '恢复'),
+    "local_job_operation_status": ('job', 'operation', 'status', '任务', '操作', '状态'),
+    "coding_task_read_file": ('coding', 'task', 'file', 'read', '编码', '任务', '文件', '读取'),
+    "coding_task_write_file": ('coding', 'task', 'write', '编码任务', '任务文件', '任务写入'),
+    "coding_task_apply_patch": ('coding', 'task', 'patch', '编码', '任务', '补丁'),
     "pdf_inspect": ("pdf", "read", "inspect", "metadata", "pages", "读取", "阅读", "元数据"),
     "pdf_search_text": ("pdf", "search", "text", "find", "查找", "搜索", "文本"),
     "pdf_redact_text": ("pdf", "edit", "redact", "remove", "编辑", "修改", "脱敏", "删除文本"),
@@ -173,14 +183,14 @@ _EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
          "timeout_sec": 900},
     ),
     "local_job_status": (
-        {"job_id": "0123456789abcdef0123456789abcdef"},
+        {"job_id": "job_0123456789abcdef01234567"},
     ),
     "local_job_logs": (
-        {"job_id": "0123456789abcdef0123456789abcdef", "stdout_offset": 0,
+        {"job_id": "job_0123456789abcdef01234567", "stdout_offset": 0,
          "stderr_offset": 0, "max_bytes": 16384},
     ),
     "local_cancel_job": (
-        {"job_id": "0123456789abcdef0123456789abcdef", "grace_sec": 2},
+        {"job_id": "job_0123456789abcdef01234567", "grace_sec": 2},
     ),
     "capability_search": (
         {"query": "PDF 编辑", "limit": 5},

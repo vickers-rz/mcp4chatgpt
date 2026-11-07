@@ -18,7 +18,7 @@ def _open(config: Config, path: str, client_id: str, *, initialize: bool
     if not client_id and not config.local_auth_disabled:
         raise ValueError("authenticated_principal_required")
     target = resolve_allowed_path(path, config.allowed_roots, must_exist=False)
-    roots = [root.expanduser().resolve(strict=True) for root in config.allowed_roots]
+    roots = [root.expanduser().resolve() for root in config.allowed_roots]
     workspace = max((root for root in roots if target.is_relative_to(root)),
                     key=lambda root: len(root.parts))
     state_dir = config.data_dir / "operations"

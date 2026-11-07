@@ -149,8 +149,8 @@ def validate_research_url(url: str, *, resolve_dns: bool = True, resolved_addres
             if isinstance(resolved, ipaddress.IPv4Address) and resolved in fake_ip_v4:
                 continue
             if isinstance(resolved, ipaddress.IPv6Address):
-                embedded_v4 = int(resolved) & 0xffffffff
-                if int(fake_ip_v4.network_address) <= embedded_v4 <= int(fake_ip_v4.broadcast_address):
+                embedded_v4 = resolved.ipv4_mapped
+                if embedded_v4 is not None and embedded_v4 in fake_ip_v4:
                     continue
             if not resolved.is_global:
                 raise ValueError(

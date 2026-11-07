@@ -48,7 +48,7 @@ let ws = null;
 let reconnectTimer = null;
 let reconnectAttempts = 0;
 let isAuthed = false;
-let changeSubscription = null; // { tabId, expiresAt, abortController }
+const changeSubscriptions = new Map(); // tab ID (or null for all tabs) -> expiry
 
 // ---------------------------------------------------------------------------
 // Storage helpers
@@ -168,12 +168,10 @@ async function ensureContentScript(tabId) {
 }
 
 function activeChangeSubscriptionFor(tabId) {
-  if (!changeSubscription) return false;
-  if (Date.now() > changeSubscription.expiresAt) {
-    changeSubscription = null;
-    return false;
+  for (const [id, expiresAt] of changeSubscriptions) {
+    if (Date.now() > expiresAt) changeSubscriptions.delete(id);
   }
-  return !changeSubscription.tabId || changeSubscription.tabId === tabId;
+  return changeSubscriptions.has(null) || changeSubscriptions.has(tabId);
 }
 
 function serializeScriptValue(value) {
@@ -665,7 +663,9 @@ async function cmdSubscribeChanges({ durationSec = 30, tabId }) {
   const durationMs = seconds * 1000;
   const tab = await getTargetTab(tabId);
   const expiresAt = Date.now() + durationMs;
-  changeSubscription = { tabId: tabId ? tab.id : null, expiresAt };
+  const subscriptionKey = tabId ? tab.id : null;
+  changeSubscriptions.set(subscriptionKey,
+    Math.max(changeSubscriptions.get(subscriptionKey) || 0, expiresAt));
 
   const contentReady = await ensureContentScript(tab.id);
   let observerStarted = false;

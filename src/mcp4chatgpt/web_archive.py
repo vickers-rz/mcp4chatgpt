@@ -333,6 +333,9 @@ def archive_page(config: Config, page: dict[str, Any], *, backend: str = "chrome
                 db.execute("UPDATE source_snapshots SET html_path=? WHERE snapshot_id=?",
                            (str(snapshot_html_path), snapshot_id))
 
+            if existing_snapshot and not snapshot_html_path and existing_snapshot["html_path"]:
+                snapshot_html_path = Path(existing_snapshot["html_path"])
+
             existing_version = db.execute(
                 "SELECT version_id FROM versions WHERE document_id=? AND content_hash=?",
                 (document_id, extracted_hash),
@@ -341,10 +344,10 @@ def archive_page(config: Config, page: dict[str, Any], *, backend: str = "chrome
             if existing_version:
                 version_id = str(existing_version["version_id"])
                 db.execute(
-                    "UPDATE versions SET snapshot_id=?, "
+                    "UPDATE versions SET snapshot_id=?, html_path=?, "
                     "extractor_version=CASE WHEN extractor_version IS NULL OR extractor_version='' OR extractor_version='legacy-pre-snapshot' THEN ? ELSE extractor_version END, "
                     "extracted_hash=COALESCE(NULLIF(extracted_hash,''),content_hash) WHERE version_id=?",
-                    (snapshot_id, extractor_version, version_id),
+                    (snapshot_id, str(snapshot_html_path) if snapshot_html_path else None, extractor_version, version_id),
                 )
                 chunks_count = db.execute("SELECT COUNT(*) FROM chunks WHERE version_id=?", (version_id,)).fetchone()[0]
             else:

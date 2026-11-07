@@ -28,7 +28,7 @@ def _workspace(config: Config, cwd: str | None) -> tuple[Path, str]:
     resolved = resolve_allowed_path(cwd or ".", config.allowed_roots, must_exist=True)
     if not resolved.is_dir():
         raise ValueError(f"Not a directory: {resolved}")
-    roots = [root.expanduser().resolve(strict=True) for root in config.allowed_roots]
+    roots = [root.expanduser().resolve() for root in config.allowed_roots]
     workspace = max(
         (root for root in roots if resolved.is_relative_to(root)),
         key=lambda root: len(root.parts),

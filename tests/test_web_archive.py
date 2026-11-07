@@ -162,3 +162,17 @@ def test_archive_concurrent_distinct_documents():
         assert len({item["document_id"] for item in saved}) == 12
         result = web_archive.search(config, "师承政策", limit=20)
         assert len(result["results"]) >= 12
+
+
+def test_html_backfill_updates_version_and_preserves_saved_state():
+    with tempfile.TemporaryDirectory() as directory:
+        config = make_config(Path(directory))
+        first = web_archive.archive_page(config, _page("content", source_hash="same"))
+        saved = web_archive.archive_page(
+            config, _page("content", source_hash="same", html="<p>content</p>")
+        )
+        assert saved["saved_html"]
+        assert web_archive.fetch(config, version_id=first["version_id"])["html_saved"]
+        replay = web_archive.archive_page(config, _page("content", source_hash="same"))
+        assert replay["saved_html"]
+        assert web_archive.fetch(config, version_id=first["version_id"])["html_saved"]

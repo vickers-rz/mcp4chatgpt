@@ -45,11 +45,13 @@ class HttpMCPClient:
         self._timeout = call_timeout
         self._lock = threading.RLock()
         self._instance_id = uuid.uuid4().hex
-        self._tools: list[dict] = []
+        self._catalog_lock = threading.Lock()
+        self._snapshot: tuple[str, list[dict]] | None = None
+        self._refreshing = False
+        self._refresh_after = 0.0
         self._started_at: float | None = None
         self._transport_error: str | None = None
         self._running = False
-        self._remote_instance_id = ""
         self._opener = build_opener(_NoRedirect())
 
     @property
@@ -78,7 +80,7 @@ class HttpMCPClient:
 
     @property
     def tools(self) -> list[dict]:
-        return self.catalog_snapshot()[1]
+        return self.cached_catalog_snapshot()[1]
 
     def _request(self, method: str, params: dict, *, name: str = "") -> dict:
         body = {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": method,
@@ -107,7 +109,6 @@ class HttpMCPClient:
             raise
         except Exception as exc:
             self._transport_error = type(exc).__name__
-            self._running = False
             raise StdioMCPClientError(f"http_downstream_transport_error:{type(exc).__name__}") from exc
         if payload.get("id") != body["id"]:
             raise StdioMCPClientError("http_downstream_response_id_mismatch")
@@ -118,6 +119,7 @@ class HttpMCPClient:
         result = payload.get("result")
         if not isinstance(result, dict):
             raise StdioMCPClientError("http_downstream_result_invalid")
+        self._transport_error = None
         return result
 
     def start(self) -> None:
@@ -148,14 +150,48 @@ class HttpMCPClient:
             remote_id = (info.get("structuredContent") or {}).get("server_instance_id")
             if not isinstance(remote_id, str) or not remote_id:
                 raise StdioMCPClientError("http_downstream_instance_identity_missing")
-            self._remote_instance_id = remote_id
-            result = self._request("tools/list", {})
-            tools = result.get("tools")
-            if not isinstance(tools, list):
-                raise StdioMCPClientError("http_downstream_tools_invalid")
+            tools = []
+            cursor = None
+            seen = set()
+            while True:
+                result = self._request("tools/list", {"cursor": cursor} if cursor else {})
+                page = result.get("tools")
+                if not isinstance(page, list):
+                    raise StdioMCPClientError("http_downstream_tools_invalid")
+                tools.extend(page)
+                cursor = result.get("nextCursor")
+                if cursor is None:
+                    break
+                if not isinstance(cursor, str) or not cursor or cursor in seen or len(seen) >= 100:
+                    raise StdioMCPClientError("http_downstream_cursor_invalid")
+                seen.add(cursor)
             digest = hashlib.sha256(json.dumps(tools, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
-            self._tools = deepcopy(tools)
-            return f"{self._instance_id}:{self._remote_instance_id}:{digest}", deepcopy(tools)
+            snapshot = (f"{self._instance_id}:{remote_id}:{digest}", tools)
+            with self._catalog_lock:
+                self._snapshot = snapshot
+                self._refresh_after = time.monotonic() + 5
+            return deepcopy(snapshot)
+
+    def cached_catalog_snapshot(self) -> tuple[str, list[dict]]:
+        """Read the last complete catalog without waiting on network I/O."""
+        with self._catalog_lock:
+            if not self._running or self._snapshot is None:
+                raise StdioMCPClientError("http_downstream_not_running")
+            if not self._refreshing and time.monotonic() >= self._refresh_after:
+                self._refreshing = True
+                threading.Thread(target=self._refresh_catalog, daemon=True).start()
+            return deepcopy(self._snapshot)
+
+    def _refresh_catalog(self) -> None:
+        try:
+            self.catalog_snapshot()
+        except Exception:
+            # Keep the last complete catalog. Calls still verify identity before execution.
+            pass
+        finally:
+            with self._catalog_lock:
+                self._refreshing = False
+                self._refresh_after = time.monotonic() + 5
 
     def call_tool(self, tool_name: str, arguments: dict, timeout: float | None = None,
                   *, expected_instance_id: str | None = None) -> dict:

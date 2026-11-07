@@ -88,3 +88,70 @@ def test_http_backend_binding_changes_after_remote_restart(tmp_path):
             second_thread.join(5)
     finally:
         client.stop()
+
+
+def test_cached_catalog_is_network_free_and_pagination_complete(monkeypatch):
+    client = HttpMCPClient(downstream_id="test", url="http://localhost/mcp")
+    requests = []
+
+    def request(method, params, **kwargs):
+        requests.append((method, params))
+        if method == "tools/call":
+            return {"structuredContent": {"server_instance_id": "one"}}
+        if method == "tools/list":
+            if params.get("cursor") == "second":
+                return {"tools": [{"name": "second"}]}
+            return {"tools": [{"name": "first"}], "nextCursor": "second"}
+        return {}
+
+    monkeypatch.setattr(client, "_request", request)
+    client.start()
+    try:
+        assert [tool["name"] for tool in client.tools] == ["first", "second"]
+        count = len(requests)
+        for _ in range(5):
+            client.cached_catalog_snapshot()
+        assert len(requests) == count
+    finally:
+        client.stop()
+
+
+def test_http_timeout_does_not_permanently_stop_client(monkeypatch):
+    client = HttpMCPClient(downstream_id="test", url="http://localhost/mcp")
+    client._running = True
+
+    def fail(*args, **kwargs):
+        raise TimeoutError()
+
+    monkeypatch.setattr(client._opener, "open", fail)
+    with pytest.raises(StdioMCPClientError, match="TimeoutError"):
+        client._request("tools/list", {})
+    assert client.is_running
+    assert client.transport_error == "TimeoutError"
+
+
+def test_background_catalog_refresh_does_not_block_cached_reads(monkeypatch):
+    client = HttpMCPClient(downstream_id="test", url="http://localhost/mcp")
+    client._running = True
+    client._snapshot = ("old", [{"name": "existing"}])
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+
+    def blocked_refresh():
+        started.set()
+        try:
+            assert release.wait(5)
+            return client._snapshot
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(client, "catalog_snapshot", blocked_refresh)
+    try:
+        assert client.cached_catalog_snapshot()[0] == "old"
+        assert started.wait(1)
+        assert client.cached_catalog_snapshot()[0] == "old"
+    finally:
+        release.set()
+        assert finished.wait(5)
+        client.stop()

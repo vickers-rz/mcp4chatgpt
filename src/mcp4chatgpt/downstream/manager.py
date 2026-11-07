@@ -137,7 +137,10 @@ class DownstreamMCPManager:
     ) -> None:
         """Register downstream tools with namespace prefix and filtering."""
         replacement: dict[str, DownstreamToolInfo] = {}
-        instance_id, tools = client.catalog_snapshot()
+        if isinstance(client, HttpMCPClient):
+            instance_id, tools = client.cached_catalog_snapshot()
+        else:
+            instance_id, tools = client.catalog_snapshot()
         for tool in tools:
             original_name = tool.get("name", "")
             if not original_name:
@@ -288,6 +291,10 @@ class DownstreamMCPManager:
                 self._errors[ds_id] = (
                     client.transport_error or "downstream process/transport is unavailable"
                 )[:1000]
+            last_error = self._errors.get(ds_id)
+            if isinstance(client, HttpMCPClient) and client.transport_error:
+                state = DownstreamState.DEGRADED
+                last_error = client.transport_error
             status = DownstreamStatus(
                 id=ds_id,
                 name=cfg.name,
@@ -299,7 +306,7 @@ class DownstreamMCPManager:
                     1 for t in tools
                     if t.downstream_id == ds_id
                 ),
-                last_error=self._errors.get(ds_id),
+                last_error=last_error,
                 started_at=client.started_at if client else None,
             )
             record = status.to_dict()
