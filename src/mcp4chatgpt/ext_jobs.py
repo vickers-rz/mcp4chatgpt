@@ -223,6 +223,8 @@ class ExtensionJobManager:
                         record = json.loads(line)
                     except json.JSONDecodeError:
                         record = {"unparsed": line[:max_chars]}
+                    if len(line) > max_chars:
+                        record = {"record_truncated": True, "preview": line[:max_chars]}
                     records.append(record)
                     used_chars += len(line)
                     next_cursor = idx + 1
@@ -243,7 +245,8 @@ class ExtensionJobManager:
             size = result_path.stat().st_size
             result["result_artifact_path"] = str(result_path)
             result["result_size_bytes"] = size
-            text = result_path.read_text(encoding="utf-8", errors="replace")
+            with result_path.open("r", encoding="utf-8", errors="replace") as stream:
+                text = stream.read(max_chars + 1)
             if len(text) <= max_chars:
                 try:
                     result["result"] = json.loads(text)
@@ -253,7 +256,23 @@ class ExtensionJobManager:
             else:
                 result["result_preview"] = text[:max_chars]
                 result["result_truncated"] = True
-        return result
+
+        def clean(value: Any) -> Any:
+            if isinstance(value, str):
+                return response_redact(self, value)
+            if isinstance(value, list):
+                return [clean(item) for item in value]
+            if isinstance(value, dict):
+                cleaned = {}
+                for key, item in value.items():
+                    cleaned_key = response_redact(self, key)
+                    if cleaned_key in cleaned:
+                        raise ExtJobError("ext_job_result_redaction_key_collision")
+                    cleaned[cleaned_key] = clean(item)
+                return cleaned
+            return value
+
+        return clean(result)
 
     def cleanup_expired(self) -> int:
         now = time.time()

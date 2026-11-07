@@ -12,6 +12,9 @@ def _definitions() -> dict[str, dict]:
 
 def test_local_job_tool_contracts() -> None:
     tools = _definitions()
+    raw_tools = {tool.name: tool for tool in build_tools(computer_mode="off")}
+    for name in ("local_start_job", "local_job_operation_status", "local_job_status", "local_job_logs", "local_list_jobs", "local_cancel_job"):
+        assert raw_tools[name].needs_client_id is True
 
     start = tools["local_start_job"]
     assert start["inputSchema"]["required"] == ["operation_id", "command"]
@@ -21,7 +24,7 @@ def test_local_job_tool_contracts() -> None:
     assert start["annotations"]["openWorldHint"] is True
     assert start["annotations"]["idempotentHint"] is True
 
-    for name in ("local_job_status", "local_job_logs", "local_list_jobs"):
+    for name in ("local_job_operation_status", "local_job_status", "local_job_logs", "local_list_jobs"):
         definition = tools[name]
         assert definition["annotations"]["readOnlyHint"] is True
         assert definition["annotations"]["destructiveHint"] is False

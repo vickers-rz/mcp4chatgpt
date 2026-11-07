@@ -358,3 +358,68 @@ class TestExtOpsAndToolRegistry:
         audit_text = audit_path.read_text(encoding="utf-8").replace(" ", "")
         assert '"channel":"extension"' in audit_text
         assert "completed" not in audit_text
+
+
+@pytest.mark.parametrize("full_access", [False, True])
+def test_result_redaction_and_bounded_preview(tmp_path, monkeypatch, full_access):
+    fake = FakeBridge()
+    secret = "sk-" + "a" * 48
+    fake.batch_payloads = [{"done": True, "records": [{"value": secret}],
+                            "result": {"value": secret, "padding": "x" * 2000}}]
+    install_fake_bridge(monkeypatch, fake)
+    manager = ExtensionJobManager(tmp_path, personal_full_access=full_access)
+    job = manager.start_js_job(code="(c, i) => ({done:true})", batch_timeout_sec=2)
+    wait_terminal(manager, job["job_id"])
+    original = Path.read_text
+
+    def no_full_result_read(path, *args, **kwargs):
+        assert path != manager._result_path(job["job_id"])
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", no_full_result_read)
+    result = manager.get_job_result(job["job_id"], max_chars=500)
+    assert result["result_truncated"]
+    assert (secret in json.dumps(result["records"])) is full_access
+    assert (secret in result["result_preview"]) is full_access
+
+
+@pytest.mark.parametrize("full_access", [False, True])
+def test_result_redacts_nested_object_keys_without_rewriting_artifacts(
+    tmp_path, monkeypatch, full_access,
+):
+    secret = "sk-" + "a" * 48
+    key = secret if full_access else "[REDACTED]"
+    fake = FakeBridge()
+    fake.batch_payloads = [{
+        "done": True,
+        "records": [{secret: "record"}],
+        "result": {"nested": [{secret: secret, "count": 1, "ok": True, "other": None}]},
+    }]
+    install_fake_bridge(monkeypatch, fake)
+    manager = ExtensionJobManager(tmp_path, personal_full_access=full_access)
+    job_id = manager.start_js_job(code="(c, i) => ({done:true})", batch_timeout_sec=2)["job_id"]
+    wait_terminal(manager, job_id)
+    paths = [manager._result_path(job_id), manager._records_path(job_id)]
+    original = [path.read_bytes() for path in paths]
+
+    for _ in range(2):
+        response = manager.get_job_result(job_id)
+        assert response["records"] == [{key: "record"}]
+        assert response["result"] == {
+            "nested": [{key: key, "count": 1, "ok": True, "other": None}]
+        }
+    assert [path.read_bytes() for path in paths] == original
+
+
+@pytest.mark.parametrize("second_key", ["sk-" + "b" * 48, "[REDACTED]"])
+def test_result_rejects_redacted_key_collisions(tmp_path, monkeypatch, second_key):
+    secret = "sk-" + "a" * 48
+    fake = FakeBridge()
+    fake.batch_payloads = [{"done": True, "result": {secret: "first", second_key: "second"}}]
+    install_fake_bridge(monkeypatch, fake)
+    manager = ExtensionJobManager(tmp_path)
+    job_id = manager.start_js_job(code="(c, i) => ({done:true})", batch_timeout_sec=2)["job_id"]
+    wait_terminal(manager, job_id)
+
+    with pytest.raises(ExtJobError, match="^ext_job_result_redaction_key_collision$"):
+        manager.get_job_result(job_id)

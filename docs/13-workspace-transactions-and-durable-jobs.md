@@ -195,6 +195,7 @@ Long work uses:
 
 ```text
 local_start_job
+local_job_operation_status
 local_job_status
 local_job_logs
 local_list_jobs
@@ -203,8 +204,17 @@ local_cancel_job
 
 ### 3.1 Idempotent start
 
-A job start carries a caller-supplied `operation_id`. The server fingerprints
-the canonical request:
+A job start carries a caller-supplied `operation_id`. At the MCP boundary,
+new reservations are scoped by the authenticated principal and the longest
+matching allowed workspace root. The per-install `local-jobs` store is the
+installation namespace; the internal reservation key hashes:
+
+```text
+principal + workspace + operation_id
+```
+
+The user-facing `operation_id` remains unchanged in job metadata. The server
+also fingerprints the canonical request:
 
 ```text
 command + cwd + timeout + shell
@@ -212,7 +222,7 @@ command + cwd + timeout + shell
 
 The operation record is durably reserved before a supervisor can be spawned.
 
-Replay rules:
+Replay rules inside one principal/workspace scope:
 
 ```text
 same operation_id + same fingerprint
@@ -223,8 +233,11 @@ same operation_id + different fingerprint
   -> idempotency_conflict
 ```
 
-This converts an uncertain outer tool delivery from an unsafe retry into an
-exact lookup.
+Different principals or workspaces may reuse the same public `operation_id`.
+During upgrades, a matching legacy unscoped reservation is checked and replayed
+before a new scoped reservation is created, so an old in-flight job is not
+duplicated. `local_job_operation_status(operation_id, cwd)` resolves the
+existing job without starting or repairing it.
 
 ### 3.2 Uncertain start crash window
 
@@ -290,6 +303,33 @@ created by the current job. The process layer therefore falls back to
 signalling the group-leader PID. This prevents cancellation/timeout from being
 misreported as a generic failed job.
 
+### 3.6 Live scoped MCP acceptance (2026-09-29)
+
+The production MCP instance was restarted with compact exposure after commit
+`9b54806`. `server_info` reported **166 capabilities / 6 listed tools**, and
+`local_job_operation_status` was discoverable through the compact capability
+catalog.
+
+A live scoped job used:
+
+```text
+operation_id = live-scope-smoke-20260929-01
+cwd          = /Users/vickers/Documents/MCP_Creator/MCP4ChatGPT
+command      = printf 'SCOPED_JOB_OK\n'
+```
+
+The first `local_start_job` returned
+`job_2711524df01d4f5fbdc7d609` with `launched=true`, a persisted principal
+hash and workspace ID. `local_job_operation_status` resolved the same job and
+reported `state=succeeded`, `exit_code=0`; `local_job_logs` returned
+`SCOPED_JOB_OK\n`.
+
+Replaying the identical scoped start returned the same job with
+`replayed=true, launched=false`. Reusing the same operation ID with a different
+command returned `idempotency_conflict`; no second job was launched. This live
+acceptance verifies the MCP-facing scoped identity and recovery lookup on top of
+the existing detached supervisor protocol.
+
 ## 4. Test evidence
 
 The focused hardening suites currently cover:
@@ -315,26 +355,29 @@ The focused hardening suites currently cover:
 - macOS `killpg` permission fallback; and
 - MCP job/write tool annotations and schemas.
 
-Latest focused invocation:
+Latest focused invocation for the scoped Job integration:
 
 ```text
-pytest -q   tests/test_local_file_transactions.py   tests/test_local_jobs.py   tests/test_local_job_tools.py
+uv run pytest -q tests/test_job_tool_api.py tests/test_local_jobs.py tests/test_local_job_tools.py tests/test_capabilities.py
 ```
 
-Latest result during this implementation:
+Result:
 
 ```text
-17 passed
+33 passed
 ```
 
-This is not a claim that the complete repository suite has been rerun.
+The complete repository suite was also rerun after the scoped principal/workspace
+boundary was added:
 
-At the time of this note, CodexPro's safe Bash verification environment uses a
-Homebrew Python 3.14 interpreter, while the project's established virtual
-environment is Python 3.13. Injecting the 3.13 site-packages into 3.14 fails on
-the ABI-specific `rpds` extension. The live MCP4ChatGPT execution connector
-and WebCodex tunnel were also temporarily unavailable, so the complete
-`.venv/bin/python -m pytest -q` run remains a separate acceptance step.
+```text
+uv run pytest -q
+420 passed, 11 skipped, 5 warnings
+```
+
+The warnings are the existing SWIG deprecation warnings. CodexPro was running
+with native Bash in `bashMode=full` for this verification, and the production
+compact MCP instance was restarted and exercised separately as described above.
 
 ## 5. Recovery and retention
 

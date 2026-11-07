@@ -22,6 +22,7 @@ from typing import Any
 
 from .config import Config
 from .jobs import manager as job_manager
+from .jobs import process as job_process
 from .safety import (
     redact,
     resolve_allowed_path,
@@ -99,21 +100,7 @@ def _clamp_timeout(timeout_sec: int) -> int:
 
 
 def _kill_process_group(proc: subprocess.Popen[str], grace_sec: float = 2.0) -> None:
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except ProcessLookupError:
-        return
-
-    deadline = time.monotonic() + grace_sec
-    while time.monotonic() < deadline:
-        if proc.poll() is not None:
-            return
-        time.sleep(0.05)
-
-    try:
-        os.killpg(proc.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return
+    job_process.terminate_process_group(proc.pid, grace_sec=grace_sec)
 
 
 def _run_process(
@@ -139,7 +126,13 @@ def _run_process(
         stdout, stderr = proc.communicate(timeout=timeout_sec)
     except subprocess.TimeoutExpired as exc:
         _kill_process_group(proc)
-        stdout, stderr = proc.communicate()
+        try:
+            stdout, stderr = proc.communicate(timeout=1)
+        except subprocess.TimeoutExpired as cleanup_exc:
+            stdout, stderr = cleanup_exc.output, cleanup_exc.stderr
+            for stream in (proc.stdout, proc.stderr):
+                if stream is not None:
+                    stream.close()
         raise subprocess.TimeoutExpired(
             args,
             timeout_sec,
@@ -187,8 +180,9 @@ def list_files(config: Config, path: str = ".", max_entries: int = 200) -> dict[
     return {"path": str(root), "entries": entries}
 
 
-def read_text(config: Config, path: str, max_chars: int | None = None) -> dict[str, Any]:
-    target = resolve_allowed_path(path, config.allowed_roots, must_exist=True)
+def read_text(config: Config, path: str, max_chars: int | None = None, *, allowed_roots: list[Path] | None = None) -> dict[str, Any]:
+    roots = config.allowed_roots if allowed_roots is None else allowed_roots
+    target = resolve_allowed_path(path, roots, must_exist=True)
     if not target.is_file():
         raise ValueError(f"Not a file: {target}")
 
@@ -251,8 +245,11 @@ def write_file(
     expected_sha256: str | None = None,
     full_replace_token: str | None = None,
     allow_large_reduction: bool = False,
+    *,
+    allowed_roots: list[Path] | None = None,
 ) -> dict[str, Any]:
-    target = resolve_allowed_path(path, config.allowed_roots, must_exist=False)
+    roots = config.allowed_roots if allowed_roots is None else allowed_roots
+    target = resolve_allowed_path(path, roots, must_exist=False)
     return transactions.write_text(
         config.audit_log.parent,
         target,
@@ -270,8 +267,11 @@ def apply_patch(
     old: str,
     new: str,
     expected_sha256: str | None = None,
+    *,
+    allowed_roots: list[Path] | None = None,
 ) -> dict[str, Any]:
-    target = resolve_allowed_path(path, config.allowed_roots, must_exist=True)
+    roots = config.allowed_roots if allowed_roots is None else allowed_roots
+    target = resolve_allowed_path(path, roots, must_exist=True)
     result = transactions.apply_exact_patch(
         config.audit_log.parent,
         target,

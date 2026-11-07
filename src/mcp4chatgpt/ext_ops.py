@@ -28,6 +28,10 @@ class ExtNotConnectedError(RuntimeError):
     """Raised when the Chrome extension is not connected to the bridge."""
 
 
+class ExtCapabilityUnavailableError(RuntimeError):
+    """Raised when a connected extension runtime is too old for one command."""
+
+
 def _require_connected() -> None:
     if not ext_bridge.is_connected():
         raise ExtNotConnectedError(
@@ -36,16 +40,47 @@ def _require_connected() -> None:
         )
 
 
+def _require_advertised_command(command: str) -> None:
+    _require_connected()
+    if ext_bridge.command_support(command) is True:
+        return
+    info = ext_bridge.connection_info()
+    version = str(info.get("version") or "unknown")
+    revision = info.get("protocol_revision", 1)
+    raise ExtCapabilityUnavailableError(
+        f"Connected Chrome extension runtime does not advertise command '{command}' "
+        f"(version={version}, protocol_revision={revision}). Reload or upgrade the "
+        "unpacked MCP4ChatGPT extension, wait for it to reconnect, then retry."
+    )
+
+
 # ---------------------------------------------------------------------------
 # Connection / status
 # ---------------------------------------------------------------------------
 
 def ext_connection_status(_config: Config) -> dict[str, Any]:
-    """Return current extension connection status."""
+    """Return current extension connection and runtime-capability status."""
     info = ext_bridge.connection_info()
     if info["connected"]:
-        info["hint"] = "Extension is connected. All browser tools are available."
+        required_commands = ["get_element_state"]
+        missing = [
+            command
+            for command in required_commands
+            if ext_bridge.command_support(command) is not True
+        ]
+        info["required_commands"] = required_commands
+        info["missing_required_commands"] = missing
+        info["extension_reload_required"] = bool(missing)
+        if missing:
+            info["hint"] = (
+                "Extension is connected, but the running extension background does not "
+                "advertise all commands required by this server. Reload or upgrade the "
+                "unpacked MCP4ChatGPT extension and wait for it to reconnect."
+            )
+        else:
+            info["hint"] = "Extension is connected and advertises all required browser commands."
     else:
+        info["extension_reload_required"] = False
         info["hint"] = (
             "Extension is NOT connected. Open Chrome, install the MCP4ChatGPT extension, "
             "and click the extension icon to connect."
@@ -154,6 +189,62 @@ def ext_get_dom(
         "truncated": truncated,
         "original_length": len(html_raw),
     }
+
+
+# ---------------------------------------------------------------------------
+# Element live state
+# ---------------------------------------------------------------------------
+
+def ext_get_element_state(
+    config: Config,
+    selector: str,
+    tab_id: int | None = None,
+    max_chars: int = 12000,
+) -> dict[str, Any]:
+    """Read live value/state for one DOM element in a Chrome tab."""
+    _require_advertised_command("get_element_state")
+    if not selector or len(selector) > 500:
+        raise ValueError("selector must be a non-empty CSS selector (max 500 chars)")
+    max_chars = max(100, min(max_chars, config.max_output_chars))
+    args: dict[str, Any] = {"selector": selector}
+    if tab_id is not None:
+        args["tabId"] = tab_id
+    result = ext_bridge.send_command("get_element_state", args, timeout=15)
+
+    def _clean_text(value: Any) -> tuple[str | None, bool]:
+        if value is None:
+            return None, False
+        redacted = response_redact(config, str(value))
+        return response_truncate(config, redacted, max_chars)
+
+    value, value_truncated = _clean_text(result.get("value"))
+    text, text_truncated = _clean_text(result.get("text"))
+    selected_values = [
+        response_redact(config, str(item))
+        for item in (result.get("selectedValues") or [])
+    ]
+
+    output: dict[str, Any] = {
+        "tab_id": result.get("tabId"),
+        "url": response_redact(config, str(result.get("url", ""))),
+        "selector": selector,
+        "found": bool(result.get("found", False)),
+        "element_tag": result.get("tagName"),
+        "element_type": result.get("type"),
+        "value": value,
+        "value_suppressed": bool(result.get("valueSuppressed", False)),
+        "value_truncated": value_truncated,
+        "checked": result.get("checked"),
+        "selected": result.get("selected"),
+        "selected_values": selected_values,
+        "disabled": result.get("disabled"),
+        "read_only": result.get("readOnly"),
+        "text": text,
+        "text_truncated": text_truncated,
+    }
+    if error := result.get("error"):
+        output["error"] = response_redact(config, str(error))
+    return output
 
 
 # ---------------------------------------------------------------------------

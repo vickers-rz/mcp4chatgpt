@@ -61,3 +61,7 @@ def test_personal_and_server_skills_keep_core_routing_contract_in_sync():
     for marker in required_contract:
         assert marker in personal
         assert marker in server
+    for marker in ("Only call a name returned by discovery", "never invent a plausible `ext_*` name",
+                   "If discovery yields no suitable capability, stop that check"):
+        assert marker in personal
+        assert marker in server

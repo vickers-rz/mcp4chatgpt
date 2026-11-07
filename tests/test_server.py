@@ -106,10 +106,11 @@ class ServerTests(unittest.TestCase):
     def issue_test_token(self, config) -> str:
         from mcp4chatgpt import oauth
 
-        client_id = "client-test"
+        client = oauth.register_client(config, {"redirect_uris": ["https://example.test/cb"]})
+        client_id = client["client_id"]
         code = f"server-code-{time.time_ns()}"
         oauth.AUTH_CODES[code] = {"client_id": client_id, "redirect_uri": "https://example.test/cb", "created_at": time.time()}
-        return issue_token(config, {"code": code, "client_id": client_id})["access_token"]
+        return issue_token(config, {"code": code, "client_id": client_id, "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://example.test/cb"})["access_token"]
 
     @staticmethod
     def modern_params(**values) -> dict:
@@ -182,6 +183,7 @@ class ServerTests(unittest.TestCase):
                     "ext_list_tabs",
                     "ext_get_active_tab",
                     "ext_get_dom",
+                    "ext_get_element_state",
                     "ext_get_selection",
                     "ext_screenshot",
                     "ext_navigate",
@@ -651,10 +653,7 @@ class ServerTests(unittest.TestCase):
             try:
                 from mcp4chatgpt import oauth
 
-                client_id = "client-test"
-                code = "array-body-code"
-                oauth.AUTH_CODES[code] = {"client_id": client_id, "redirect_uri": "https://example.test/cb", "created_at": time.time()}
-                token = issue_token(config, {"code": code, "client_id": client_id})["access_token"]
+                token = self.issue_test_token(config)
                 status, payload = post_raw_json(f"http://{host}:{port}/mcp", [], token=token)
                 self.assertEqual(status, 200)
                 self.assertEqual(payload["error"]["code"], -32000)

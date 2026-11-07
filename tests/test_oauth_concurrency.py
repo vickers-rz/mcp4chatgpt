@@ -55,3 +55,30 @@ def test_failed_atomic_client_write_preserves_existing_file(tmp_path, monkeypatc
     with pytest.raises(OSError, match="disk error"):
         oauth.register_client(config, {"redirect_uris": []})
     assert json.loads(path.read_text()) == {"existing": {}}
+
+
+def test_client_authentication_and_public_pkce(tmp_path):
+    import base64
+    import hashlib
+    from urllib.parse import parse_qs, urlparse
+
+    config = SimpleNamespace(data_dir=tmp_path, auth_secret="admin", mcp_url="https://example.test/mcp")
+    redirect = "https://client.test/callback"
+    for method in ("client_secret_post", "none"):
+        client = oauth.register_client(config, {"redirect_uris": [redirect], "token_endpoint_auth_method": method})
+        verifier = "a" * 43
+        challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip("=")
+        params = {"client_id": client["client_id"], "redirect_uri": redirect, "code_challenge": challenge, "code_challenge_method": "S256"}
+        code = parse_qs(urlparse(oauth.create_auth_redirect(config, params, "admin")).query)["code"][0]
+        request = {"grant_type": "authorization_code", "client_id": client["client_id"], "redirect_uri": redirect, "code": code, "code_verifier": verifier}
+        if method == "client_secret_post":
+            with pytest.raises(ValueError, match="client secret"):
+                oauth.issue_token(config, {**request, "client_secret": "wrong"})
+            request["client_secret"] = client["client_secret"]
+        else:
+            assert "client_secret" not in client
+            with pytest.raises(ValueError, match="PKCE"):
+                oauth.issue_token(config, {**request, "code_verifier": "b" * 43})
+        assert oauth.issue_token(config, request)["access_token"]
+        with pytest.raises(ValueError, match="authorization code"):
+            oauth.issue_token(config, request)

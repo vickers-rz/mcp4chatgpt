@@ -29,3 +29,22 @@ def test_discovery_search_query_set():
     assert report["weighted"]["top1_hits"] >= report["legacy"]["top1_hits"]
     assert report["weighted"]["top5_hits"] >= report["legacy"]["top5_hits"]
     print("DISCOVERY_SEARCH=" + json.dumps(report, ensure_ascii=False, sort_keys=True))
+
+
+def test_manual_chatgpt_benchmark_collection_consistency():
+    report = json.loads((_ROOT / "runs" / "2026-09-29-chatgpt-manual.json").read_text(encoding="utf-8"))
+    runs = report["runs"]
+    status = report["collection_status"]
+
+    assert status["recorded_runs"] == len(runs)
+    assert status["planned_runs"] == len(runs) + len(status["remaining"])
+
+    run_keys = {(item["exposure"], item["trial"], item["task_id"]) for item in runs}
+    remaining_keys = {
+        (item["exposure"], item["trial"], item["task_id"])
+        for item in status["remaining"]
+    }
+    assert len(run_keys) == len(runs)
+    assert run_keys.isdisjoint(remaining_keys)
+    assert all(item["fresh_chat"] is True for item in runs)
+    assert all(item["complete"] is True for item in runs)

@@ -495,6 +495,26 @@ class CoreTests(unittest.TestCase):
             self.assertFalse(status["connected"])
             self.assertIn("NOT connected", status["hint"])
 
+    def test_ext_connection_status_legacy_runtime_requires_reload(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            legacy = {
+                "connected": True,
+                "version": "1.0.4",
+                "platform": "MacIntel",
+                "protocol_revision": 1,
+                "supported_commands": None,
+                "capabilities_advertised": False,
+            }
+            with mock.patch("mcp4chatgpt.ext_bridge.connection_info", return_value=legacy), \
+                    mock.patch("mcp4chatgpt.ext_bridge.command_support", return_value=None):
+                status = ext_ops.ext_connection_status(config)
+
+            self.assertTrue(status["connected"])
+            self.assertTrue(status["extension_reload_required"])
+            self.assertEqual(status["missing_required_commands"], ["get_element_state"])
+            self.assertIn("Reload or upgrade", status["hint"])
+
     def test_ext_list_tabs_requires_connection(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
@@ -579,6 +599,87 @@ class CoreTests(unittest.TestCase):
             )
             self.assertEqual(result["element_tag"], "TEXTAREA")
             self.assertEqual(result["error"], "setter failed")
+
+    def test_ext_get_element_state_rejects_legacy_runtime_before_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock()
+            legacy = {
+                "connected": True,
+                "version": "1.0.4",
+                "protocol_revision": 1,
+                "supported_commands": None,
+                "capabilities_advertised": False,
+            }
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.command_support", return_value=None), \
+                    mock.patch("mcp4chatgpt.ext_bridge.connection_info", return_value=legacy), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                with self.assertRaisesRegex(
+                    ext_ops.ExtCapabilityUnavailableError,
+                    "Reload or upgrade",
+                ):
+                    ext_ops.ext_get_element_state(config, "#note", tab_id=7)
+
+            send.assert_not_called()
+
+    def test_ext_get_element_state_preserves_live_value_and_tab_target(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabId": 7,
+                "url": "https://example.test/form",
+                "found": True,
+                "tagName": "TEXTAREA",
+                "type": None,
+                "value": "live value",
+                "valueSuppressed": False,
+                "checked": None,
+                "selected": None,
+                "selectedValues": [],
+                "disabled": False,
+                "readOnly": False,
+                "text": "",
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.command_support", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_get_element_state(
+                    config,
+                    "#note",
+                    tab_id=7,
+                    max_chars=1000,
+                )
+
+            send.assert_called_once_with(
+                "get_element_state",
+                {"selector": "#note", "tabId": 7},
+                timeout=15,
+            )
+            self.assertTrue(result["found"])
+            self.assertEqual(result["tab_id"], 7)
+            self.assertEqual(result["value"], "live value")
+            self.assertFalse(result["value_suppressed"])
+            self.assertFalse(result["value_truncated"])
+            self.assertFalse(result["read_only"])
+
+    def test_ext_get_element_state_reports_missing_element(self) -> None:
+        with tempfile.TemporaryDirectory() as d:
+            config = make_config(Path(d))
+            send = mock.Mock(return_value={
+                "tabId": 9,
+                "url": "https://example.test/form",
+                "found": False,
+                "error": "No element matching: #missing",
+            })
+            with mock.patch("mcp4chatgpt.ext_bridge.is_connected", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.command_support", return_value=True), \
+                    mock.patch("mcp4chatgpt.ext_bridge.send_command", send):
+                result = ext_ops.ext_get_element_state(config, "#missing", tab_id=9)
+
+            self.assertFalse(result["found"])
+            self.assertEqual(result["url"], "https://example.test/form")
+            self.assertEqual(result["error"], "No element matching: #missing")
 
     def test_ext_fill_input_preserves_attempted_submission_status(self) -> None:
         with tempfile.TemporaryDirectory() as d:
@@ -696,7 +797,7 @@ class CoreTests(unittest.TestCase):
                 "redirect_uri": "https://chat.openai.com/aip/callback",
                 "created_at": time.time(),
             }
-            token = issue_token(config, {"code": code, "client_id": client["client_id"]})["access_token"]
+            token = issue_token(config, {"code": code, "client_id": client["client_id"], "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://chat.openai.com/aip/callback"})["access_token"]
             self.assertEqual(verify_token(config, token), client["client_id"])
 
     def test_oauth_register_rejects_invalid_redirect_uris(self) -> None:
@@ -715,7 +816,8 @@ class CoreTests(unittest.TestCase):
             from mcp4chatgpt import oauth
 
             code = "concurrent-code"
-            client_id = "client-test"
+            client = register_client(config, {"redirect_uris": ["https://chat.openai.com/aip/callback"]})
+            client_id = client["client_id"]
             oauth.AUTH_CODES[code] = {
                 "client_id": client_id,
                 "redirect_uri": "https://chat.openai.com/aip/callback",
@@ -726,7 +828,7 @@ class CoreTests(unittest.TestCase):
 
             def consume() -> None:
                 try:
-                    successes.append(issue_token(config, {"code": code, "client_id": client_id}))
+                    successes.append(issue_token(config, {"code": code, "client_id": client_id, "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://chat.openai.com/aip/callback"}))
                 except ValueError as exc:
                     failures.append(str(exc))
 
@@ -777,34 +879,38 @@ class CoreTests(unittest.TestCase):
             config = make_config(Path(d))
             from mcp4chatgpt import oauth
 
+            client = register_client(config, {"redirect_uris": ["https://chat.openai.com/aip/callback"]})
             code = "expired-code"
             oauth.AUTH_CODES[code] = {
-                "client_id": "client-test",
+                "client_id": client["client_id"],
                 "redirect_uri": "https://chat.openai.com/aip/callback",
                 "created_at": 0,  # epoch 0 → always expired
             }
             with self.assertRaises(ValueError) as ctx:
-                issue_token(config, {"code": code, "client_id": "client-test"})
+                issue_token(config, {"code": code, "client_id": client["client_id"], "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://chat.openai.com/aip/callback"})
             self.assertIn("expired", str(ctx.exception).lower())
             # Expired code must have been consumed; a second attempt must fail too.
             with self.assertRaises(ValueError):
-                issue_token(config, {"code": code, "client_id": "client-test"})
+                issue_token(config, {"code": code, "client_id": client["client_id"], "client_secret": client["client_secret"], "grant_type": "authorization_code", "redirect_uri": "https://chat.openai.com/aip/callback"})
 
     def test_oauth_pkce_requires_verifier(self) -> None:
         with tempfile.TemporaryDirectory() as d:
             config = make_config(Path(d))
             from mcp4chatgpt import oauth
-
+            redirect = "https://chat.openai.com/aip/callback"
+            client = register_client(config, {"redirect_uris": [redirect]})
             code = "pkce-code"
             oauth.AUTH_CODES[code] = {
-                "client_id": "client-test",
-                "redirect_uri": "https://chat.openai.com/aip/callback",
-                "code_challenge": "challenge",
-                "code_challenge_method": "plain",
-                "created_at": 9999999999,
+                "client_id": client["client_id"], "redirect_uri": redirect,
+                "code_challenge": "challenge", "code_challenge_method": "plain",
+                "created_at": time.time(),
             }
-            with self.assertRaises(ValueError):
-                issue_token(config, {"code": code, "client_id": "client-test"})
+            request = {"code": code, "client_id": client["client_id"],
+                       "client_secret": client["client_secret"], "redirect_uri": redirect,
+                       "grant_type": "authorization_code"}
+            with self.assertRaisesRegex(ValueError, "code_verifier"):
+                issue_token(config, request)
+            self.assertTrue(issue_token(config, {**request, "code_verifier": "challenge"})["access_token"])
 
     def test_chunk_overlap_is_capped(self) -> None:
         from mcp4chatgpt.knowledge_ops import _chunk_text
@@ -901,6 +1007,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("ext_list_tabs", names)
             self.assertIn("ext_get_active_tab", names)
             self.assertIn("ext_get_dom", names)
+            self.assertIn("ext_get_element_state", names)
             self.assertIn("ext_get_selection", names)
             self.assertIn("ext_screenshot", names)
             self.assertIn("ext_navigate", names)
@@ -983,6 +1090,7 @@ class CoreTests(unittest.TestCase):
             tools = {tool["name"]: tool for tool in registry.list_tools(auth_required=True)["tools"]}
 
             self.assertTrue(tools["ext_get_active_tab"]["annotations"]["readOnlyHint"])
+            self.assertTrue(tools["ext_get_element_state"]["annotations"]["readOnlyHint"])
             self.assertTrue(tools["ext_screenshot"]["annotations"]["readOnlyHint"])
             self.assertTrue(tools["ext_listen_changes"]["annotations"]["readOnlyHint"])
             self.assertFalse(tools["ext_navigate"]["annotations"]["readOnlyHint"])
@@ -1004,6 +1112,7 @@ class CoreTests(unittest.TestCase):
             self.assertIn("Accessibility", tools["app_write_text"]["description"])
             self.assertIn("reuse the returned tab_id", tools["ext_navigate"]["description"])
             self.assertIn("same tab_id", tools["ext_fill_input"]["description"])
+            self.assertIn("same fresh tab_id", tools["ext_get_element_state"]["description"])
 
     def test_co_te_app_schemas_expose_non_terminal_apps(self) -> None:
         with tempfile.TemporaryDirectory() as d:

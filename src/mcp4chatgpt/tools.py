@@ -18,6 +18,7 @@ import os
 import platform
 import threading
 import time
+import uuid
 from copy import deepcopy
 from referencing import Registry
 from referencing.exceptions import NoSuchResource
@@ -45,6 +46,9 @@ from . import chrome_ops, computer_ops, ext_ops, file_resources, knowledge_ops, 
 from . import browser_search, skill_resources, web_archive, web_read_status
 from .mcp_types import RawMCPToolResult
 from .downstream.manager import DownstreamMCPManager
+from .operations import tool_api as operation_tool_api
+from .jobs import tool_api as job_tool_api
+from .workspace import coding_task_tool_api, worktree_tool_api
 
 
 ToolHandler = Callable[[Config, dict[str, Any]], Any]
@@ -118,6 +122,7 @@ class Tool:
     backend_id: str | None = None
     backend_instance_id: str | None = None
     original_name: str | None = None
+    needs_client_id: bool = False
 
     def definition(self, *, auth_required: bool = True) -> dict[str, Any]:
         security_schemes = [{"type": "oauth2", "scopes": ["local", "web", "knowledge"]}]
@@ -164,10 +169,13 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
     allowlists, command blocking, and audit logging independently.
     """
     mutating = {
+        "coding_task_create", "coding_task_validate", "coding_task_reconcile_validation",
+        "coding_task_publish", "coding_task_integrate", "coding_task_write_file", "coding_task_apply_patch",
         "pdf_redact_text", "pdf_insert_text",
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_request_permissions", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
-        "local_apply_patch",
+        "local_apply_patch", "local_strict_write_file", "local_strict_apply_patch",
+        "local_worktree_create", "local_worktree_remove",
         "local_run_command",
         "local_start_job",
         "local_cancel_job",
@@ -193,6 +201,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "computer_list_apps", "computer_get_state", "computer_screenshot", "computer_list_displays", "computer_screenshot_display", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll", "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard",
         "local_run_command",
         "local_start_job",
+        "coding_task_validate",
         "app_get_context",
         "app_write_text",
         "terminal_run_command",
@@ -210,6 +219,7 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_list_tabs",
         "ext_get_active_tab",
         "ext_get_dom",
+        "ext_get_element_state",
         "ext_get_selection",
         "ext_screenshot",
         "ext_navigate",
@@ -223,10 +233,14 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_listen_changes",
     }
     destructive = name in {
+        "coding_task_create", "coding_task_validate", "coding_task_reconcile_validation",
+        "coding_task_publish", "coding_task_integrate", "coding_task_write_file", "coding_task_apply_patch",
         "pdf_redact_text", "pdf_insert_text",
         "computer_click", "computer_press_key", "computer_type_text", "computer_type_keyboard", "computer_launch_app", "computer_activate_window", "computer_pointer_move", "computer_pointer_click", "computer_pointer_drag", "computer_pointer_scroll",
         "local_write_file",
         "local_apply_patch",
+        "local_worktree_create",
+        "local_worktree_remove",
         "local_run_command",
         "local_start_job",
         "local_cancel_job",
@@ -240,7 +254,10 @@ def _annotations_for_tool(name: str) -> dict[str, bool]:
         "ext_start_js_job",
         "ext_cancel_job",
     }
-    protocol_idempotent = name in {"local_start_job", "local_cancel_job"}
+    protocol_idempotent = name in {"local_start_job", "local_cancel_job",
+                                   "local_strict_write_file", "local_strict_apply_patch",
+                                   "local_operation_reconcile",
+                                   "local_worktree_create", "local_worktree_remove"}
     return {
         "readOnlyHint": name not in mutating,
         "destructiveHint": destructive,
@@ -522,8 +539,41 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
             ),
         ),
         Tool(
+            "local_strict_write_file",
+            "Replace an existing ordinary UTF-8 file with a durable operation_id. Requires a complete local_read_text proof and expected_sha256. Same operation_id and same request returns the stored result; uncertain effects require explicit reconciliation. Rejects unsupported file metadata and types.",
+            _schema({"operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "path": {"type": "string"}, "content": {"type": "string"},
+                     "expected_sha256": {"type": "string"}, "full_replace_token": {"type": "string"},
+                     "allow_large_reduction": {"type": "boolean", "default": False}},
+                    ["operation_id", "path", "content", "expected_sha256", "full_replace_token"]),
+            operation_tool_api.write, needs_client_id=True,
+        ),
+        Tool(
+            "local_strict_apply_patch",
+            "Replace the first exact text anchor in an existing ordinary UTF-8 file with durable operation_id and expected_sha256. Replay returns the stored result without applying again.",
+            _schema({"operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "path": {"type": "string"}, "old": {"type": "string"},
+                     "new": {"type": "string"}, "expected_sha256": {"type": "string"}},
+                    ["operation_id", "path", "old", "new", "expected_sha256"]),
+            operation_tool_api.patch, needs_client_id=True,
+        ),
+        Tool(
+            "local_operation_status",
+            "Read the durable state of one strict file operation by its original path and operation_id. Does not retry or reconcile it.",
+            _schema({"operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "path": {"type": "string"}}, ["operation_id", "path"]),
+            operation_tool_api.status, needs_client_id=True,
+        ),
+        Tool(
+            "local_operation_reconcile",
+            "Explicitly compare durable evidence with the target of one strict file operation. Never replays or modifies the target. Use after an uncertain result or process crash.",
+            _schema({"operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                     "path": {"type": "string"}}, ["operation_id", "path"]),
+            operation_tool_api.reconcile, needs_client_id=True,
+        ),
+        Tool(
             "local_start_job",
-            "Start a durable local shell job exactly once for one operation_id and request fingerprint. Replaying the same operation_id with the same request returns the existing job without spawning again; a different request returns idempotency_conflict.",
+            "Start a durable local shell job once per authenticated principal, workspace and operation_id. Same scoped operation_id plus the same request replays the existing job; a different request returns idempotency_conflict. Legacy unscoped reservations are checked first to avoid duplicate execution during upgrades.",
             _schema(
                 {
                     "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
@@ -533,23 +583,32 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 },
                 ["operation_id", "command"],
             ),
-            lambda c, a: local_ops.start_job(
-                c,
-                a["operation_id"],
-                a["command"],
-                a.get("cwd"),
-                int(a.get("timeout_sec", 900)),
+            job_tool_api.start,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_job_operation_status",
+            "Resolve an existing durable local job by operation_id in the authenticated principal and workspace scope. Observation-only: never starts, retries, cancels or repairs a job. cwd selects the same workspace scope used by local_start_job.",
+            _schema(
+                {
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "cwd": {"type": "string"},
+                },
+                ["operation_id"],
             ),
+            job_tool_api.operation_status,
+            needs_client_id=True,
         ),
         Tool(
             "local_job_status",
-            "Observe durable local job state and process liveness. Observation-only: never starts, retries, cancels, or repairs a job.",
+            "Observe durable local job state and process liveness. New scoped jobs are principal-bound; legacy jobs retain historical compatibility. Observation-only: never starts, retries, cancels, or repairs a job.",
             _schema({"job_id": {"type": "string"}}, ["job_id"]),
-            lambda c, a: local_ops.job_status(c, a["job_id"]),
+            job_tool_api.status,
+            needs_client_id=True,
         ),
         Tool(
             "local_job_logs",
-            "Read retained stdout/stderr from explicit byte cursors. Observation-only and safe to replay.",
+            "Read retained stdout/stderr from explicit byte cursors. New scoped jobs are principal-bound. Observation-only and safe to replay.",
             _schema(
                 {
                     "job_id": {"type": "string"},
@@ -559,23 +618,19 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 },
                 ["job_id"],
             ),
-            lambda c, a: local_ops.job_logs(
-                c,
-                a["job_id"],
-                int(a.get("stdout_offset", 0)),
-                int(a.get("stderr_offset", 0)),
-                int(a.get("max_bytes", 16384)),
-            ),
+            job_tool_api.logs,
+            needs_client_id=True,
         ),
         Tool(
             "local_list_jobs",
-            "List durable local jobs from persisted metadata without starting or changing them.",
+            "List durable local jobs visible to the authenticated principal from persisted metadata without starting or changing them. Legacy jobs remain visible for compatibility.",
             _schema({"limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}}),
-            lambda c, a: local_ops.list_jobs(c, int(a.get("limit", 50))),
+            job_tool_api.list_jobs,
+            needs_client_id=True,
         ),
         Tool(
             "local_cancel_job",
-            "Explicitly cancel one durable local job. Repeated cancellation of an already-terminal job is a no-op.",
+            "Explicitly cancel one durable local job. New scoped jobs are principal-bound. Repeated cancellation of an already-terminal job is a no-op.",
             _schema(
                 {
                     "job_id": {"type": "string"},
@@ -583,11 +638,207 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
                 },
                 ["job_id"],
             ),
-            lambda c, a: local_ops.cancel_job(
-                c,
-                a["job_id"],
-                float(a.get("grace_sec", 2)),
+            job_tool_api.cancel,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_worktree_create",
+            "Create an isolated managed Git worktree for concurrent coding sessions from an exact clean-source commit. Scoped by authenticated principal and workspace. Replay returns the existing worktree.",
+            _schema(
+                {
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "cwd": {"type": "string"},
+                    "base_ref": {"type": "string", "default": "HEAD"},
+                },
+                ["operation_id", "cwd"],
             ),
+            worktree_tool_api.create,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_worktree_status",
+            "Inspect one managed Git worktree within the authenticated principal and repository workspace, including registered status, clean/dirty state, and HEAD commit.",
+            _schema(
+                {
+                    "worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"},
+                    "cwd": {"type": "string", "description": "Repository path used to prove workspace authorization."},
+                },
+                ["worktree_id", "cwd"],
+            ),
+            worktree_tool_api.status,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_worktree_list",
+            "Page through managed Git worktrees scoped to the authenticated principal and repository workspace.",
+            _schema(
+                {
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+                    "cursor": {"type": "string", "description": "Opaque cursor (worktree_id) from previous response next_cursor for pagination."},
+                    "cwd": {"type": "string", "description": "Repository path used to select and authorize the workspace."},
+                },
+                ["cwd"],
+            ),
+            worktree_tool_api.list_worktrees,
+            needs_client_id=True,
+        ),
+        Tool(
+            "local_worktree_remove",
+            "Remove one clean managed Git worktree within the authenticated principal and repository workspace. Rejects dirty worktrees; replay after removal is a no-op.",
+            _schema(
+                {
+                    "worktree_id": {"type": "string", "pattern": r"^wt_[a-f0-9]{24}$"},
+                    "cwd": {"type": "string", "description": "Repository path used to prove workspace authorization."},
+                },
+                ["worktree_id", "cwd"],
+            ),
+            worktree_tool_api.remove,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_read_file",
+            "Read a UTF-8 file relative to the task checkout and return its version and replacement proof.",
+            _schema(
+                {
+                    "cwd": {"type": "string"},
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "path": {"type": "string", "minLength": 1},
+                    "max_chars": {"type": "integer"},
+                },
+                ["cwd", "task_id", "path"],
+            ),
+            coding_task_tool_api.read_file,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_write_file",
+            "Transactionally create or replace a declared task file. Overwrite requires a version and replacement proof.",
+            _schema(
+                {
+                    "cwd": {"type": "string"},
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "path": {"type": "string", "minLength": 1},
+                    "content": {"type": "string"},
+                    "overwrite": {"type": "boolean"},
+                    "expected_sha256": {"type": "string"},
+                    "full_replace_token": {"type": "string"},
+                    "allow_large_reduction": {"type": "boolean"},
+                },
+                ["cwd", "task_id", "path", "content"],
+            ),
+            coding_task_tool_api.write_file,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_apply_patch",
+            "Replace exact text in a declared task file using its expected SHA-256.",
+            _schema(
+                {
+                    "cwd": {"type": "string"},
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "path": {"type": "string", "minLength": 1},
+                    "old": {"type": "string"},
+                    "new": {"type": "string"},
+                    "expected_sha256": {"type": "string"},
+                },
+                ["cwd", "task_id", "path", "old", "new", "expected_sha256"],
+            ),
+            coding_task_tool_api.apply_patch,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_create",
+            "Create or replay a validated coding task pinned to an exact Git baseline. The task owns an isolated managed worktree and an explicit set of repository-relative paths.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                    "base_ref": {"type": "string", "default": "HEAD"},
+                    "paths": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 200,
+                        "uniqueItems": True,
+                        "items": {"type": "string", "minLength": 1, "maxLength": 512},
+                    },
+                },
+                ["task_id", "cwd", "paths"],
+            ),
+            coding_task_tool_api.create,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_inspect",
+            "Inspect a coding task, its worktree, validation freshness, and the target of its published task_ref.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                },
+                ["task_id", "cwd"],
+            ),
+            coding_task_tool_api.inspect,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_validate",
+            "Commit only the task's declared paths, run a validation command in the isolated worktree, and persist evidence bound to the exact candidate commit/tree. The command has worktree isolation but no OS-level sandbox.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "command": {"type": "string", "minLength": 1},
+                    "timeout_sec": {"type": "integer", "minimum": 1, "maximum": 1800, "default": 300},
+                },
+                ["task_id", "cwd", "operation_id", "command"],
+            ),
+            coding_task_tool_api.validate,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_reconcile_validation",
+            "Abandon an interrupted validation operation after reviewing possible command effects. Refuses while its recorded process group is still running; the operation_id cannot be reused.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                    "operation_id": {"type": "string", "minLength": 1, "maxLength": 128},
+                    "resolution": {"type": "string", "enum": ["abandon", "abandon_unknown_process"]},
+                    "confirm_effects_reviewed": {"type": "boolean", "const": True},
+                    "confirm_no_process_running": {"type": "boolean"},
+                },
+                ["task_id", "cwd", "operation_id", "resolution", "confirm_effects_reviewed"],
+            ),
+            coding_task_tool_api.reconcile_validation,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_publish",
+            "Publish only a still-current validated candidate using compare-and-swap on its scoped task_ref. Rejects stale validation and ref drift.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                },
+                ["task_id", "cwd"],
+            ),
+            coding_task_tool_api.publish,
+            needs_client_id=True,
+        ),
+        Tool(
+            "coding_task_integrate",
+            "Fast-forward a clean source checkout to the published task candidate only when source HEAD equals expected_source_commit. Rejects dirty or diverged source state; never reset/rebase/cherry-pick automatically.",
+            _schema(
+                {
+                    "task_id": {"type": "string", "pattern": r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$"},
+                    "cwd": {"type": "string"},
+                    "expected_source_commit": {"type": "string", "pattern": r"^[a-fA-F0-9]{40}$"},
+                },
+                ["task_id", "cwd", "expected_source_commit"],
+            ),
+            coding_task_tool_api.integrate,
+            needs_client_id=True,
         ),
         Tool(
             "local_run_command",
@@ -856,6 +1107,25 @@ def build_tools(*, computer_mode: str = "off") -> list[Tool]:
             ),
         ),
         Tool(
+            "ext_get_element_state",
+            "Read live state for one CSS-selected element from a Chrome tab, including its current value/check/selection state. Use the same fresh tab_id returned by ext_list_tabs or ext_navigate when verifying a prior browser action. Requires the MCP4ChatGPT Chrome extension.",
+            _schema({
+                "tab_id": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "description": "Target Chrome Extension tab ID. Reuse a freshly observed tab_id for state verification.",
+                },
+                "selector": {"type": "string", "description": "CSS selector for one element to inspect."},
+                "max_chars": {"type": "integer", "default": 12000},
+            }, ["selector"]),
+            lambda c, a: ext_ops.ext_get_element_state(
+                c,
+                str(a["selector"]),
+                a.get("tab_id"),
+                int(a.get("max_chars", 12000)),
+            ),
+        ),
+        Tool(
             "ext_get_selection",
             "Get the currently selected text from a Chrome tab. Requires the MCP4ChatGPT Chrome extension.",
             _schema({"tab_id": {"type": "integer"}}),
@@ -1033,6 +1303,7 @@ class ToolRegistry:
         self.config = config
         self.audit = audit
         self._downstream_manager = downstream_manager
+        self.server_instance_id = uuid.uuid4().hex
         self._catalog_lock = threading.RLock()
         listed_tools = build_tools(computer_mode=getattr(config, "computer_mode", "off"))
         if _ext_async_jobs_enabled():
@@ -1681,7 +1952,8 @@ class ToolRegistry:
             # Each subsystem returns native structured data; _ok wraps it in
             # MCP text content while preserving structuredContent for clients
             # that can use it.
-            result = tool.handler(self.config, arguments or {})
+            result = (tool.handler(self.config, arguments or {}, client_id)
+                      if tool.needs_client_id else tool.handler(self.config, arguments or {}))
             audit_fields = self._web_audit_fields(name, arguments, result)
             audit_ok = not (isinstance(result, RawMCPToolResult) and result.value.get("isError") is True)
             if name.startswith("computer_"):
@@ -1700,7 +1972,8 @@ class ToolRegistry:
                         "listed_count": len(self._all_listed_names),
                         "catalog_version": self.catalog_version,
                     }
-                result = {**result, "tool_catalog": tool_catalog}
+                result = {**result, "server_instance_id": self.server_instance_id,
+                          "tool_catalog": tool_catalog}
             self.audit.log("tool_call", tool=name, client_id=client_id, ok=audit_ok, channel=channel,
                            run_id=context.run_id, entrypoint=context.entrypoint, catalog_version=catalog_version,
                            capability_revision=capability_revision,

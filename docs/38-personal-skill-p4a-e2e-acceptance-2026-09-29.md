@@ -109,3 +109,28 @@ Prompt：`请做一次无破坏性的 4GPT 本机 Chrome tab-handle 验收，目
 - 新增的 `scripts/p4a_e2e_fixture.py` 只提供本机合成 HTML 页面和合成 Cookie；没有更改 production Skill contract、MCP protocol、Web route 或分类阈值。ChatGPT 中的 Skill 配置已同步，仓库源文件未变。
 - 验收结束后关闭了本轮创建的三个测试标签页，通过 fixture `/clear` 清除了本轮合成 Cookie，并停止了 fixture HTTP 服务；没有触碰真实网站登录态。
 - 本轮没有 production 代码修复；因此无需相关 regression test。没有推送或合并。
+
+## 2026-09-29 后续修正
+
+针对 `ext_read_page` 猜测，个人 Skill 源文件和服务端 Skill 资源都增加了具体的
+`capability_search` → `capability_get` → `capability_call` 规则：只能调用发现返回的
+名称，后续核对若需要另一能力须重新发现；发现不到就停止并报告限制。已在 ChatGPT
+个人 Skill 编辑器保存并重新读取，界面显示“技能已保存”且正文包含新规则。
+仓库同步测试覆盖两份 Skill 规则。此处记录的是指令更新，不把它等同于新的模型
+行为回归通过；仍需独立新会话复测同类场景。
+
+## 2026-09-29 新会话行为回归
+
+充值后在 ChatGPT **Chat** 模式中新建[显式 `local web access` 会话](https://chatgpt.com/c/6abb572b-efec-83ea-8843-777e3e636591)，要求对合成 `/form` 页面新开标签、填入 `P4A_SKILL_REGRESSION_20260929` 且不提交，然后核对实时输入值。发送前界面保留 Skill 标签；模型选择器只显示思考强度“高”，未显示可核实的后端精确版本。
+
+服务端审计 `1790662476.040464`–`1790662584.497044`：同一 ChatGPT client 有 14 次 `capability_search`、4 次 `capability_get`、1 次 `ext_navigate`、1 次 `ext_fill_input`，全部 `ok=true`；没有 `ext_read_page` 或其他 `capability_not_found`。当次 catalog version 为 `8bd2eb59c7400481be5a0de2c87e5be0c80bf5c52494eb8e36211e35d8c49aaa`。`ext_navigate` 返回新 tab ID `59534752`；模型对该 ID 填写，报告 `filled=true`、`submitted=false`、`submit_attempted=false`。独立 Chrome UI 核对该合成标签的 `#note` 实时值确为上述字符串；随后关闭该测试标签。
+
+模型发现 `ext_get_dom` 只能保证 `outerHTML`，不能可靠证明实时 `.value`；另一个 `chrome_devtools__evaluate_script` 使用不同的 `pageId`，没有证据表明它与 Extension tab ID 是同一句柄。模型因此停止并如实说明**未能通过 4GPT 自身完成最终读回**。本次针对“不能猜测不存在的 `ext_read_page`”的行为回归 **PASS（1/1）**；4GPT 同源实时表单值读回能力仍缺失，后续可补一个按 Extension tab ID 定位的只读能力。focused 回归 `36 passed`。
+
+## 2026-09-29 同句柄实时元素状态补强
+
+针对上面的能力缺口，仓库新增只读 `ext_get_element_state`：输入 `tab_id + selector`，由同一 Chrome Extension bridge 在指定 tab 内读取单个元素的实时 property 状态，而不是复用 `outerHTML`。返回面刻意限制为 `value`、`checked`、`selected` / `selected_values`、`disabled`、`read_only`、元素类型和有限文本；不开放任意 JavaScript，也不枚举任意属性。工具 schema 要求 selector，显式 tab ID 时要求正整数，并在说明中要求核对动作复用 freshly observed 的同一句柄。
+
+该能力已接入 MCP 工具注册、browser capability catalog、发现关键词和 P5 HTTP downstream allowlist 示例；Python 适配层复用现有 response redaction/truncation policy（`personal_full_access` 下按既有设计保留完整响应，不把 `max_chars` 误表述为强制传输上限）。随后又为 Extension bridge 增加 protocol revision / supported-command advertisement，并将扩展版本提升到 **1.0.5**；旧 runtime 仍可连接和使用既有命令，但新命令会在服务端 dispatch 前 fail closed。最新 focused Extension/核心集合为 **101 passed**，完整 `uv run pytest -q` 为 **426 passed, 11 skipped, 5 warnings**。
+
+**LIVE PASS。** 正式 MCP4ChatGPT 实例仍为 compact exposure，`server_info` 实测 **166 capabilities / 6 listed tools**。Chrome unpacked Extension 已完成 Reload 并以 **version=1.0.5 / protocol_revision=2** 重新连接；最新 `ext_connection_status` 为 `connected=true`、`capabilities_advertised=true`、`missing_required_commands=[]`、`extension_reload_required=false`，connection generation 为 `6fc904f55858481687a01429175a7d1d`。最终同句柄验收新开 `/form` 得到 fresh tab `59535031`，`ext_fill_input(tab_id=59535031, selector=#note, value=P4A_LIVE_PASS_20260929_FINAL, submit=false)` 返回 `filled=true`；随后用同一 `tab_id=59535031` 调 `ext_get_element_state`，返回 `found=true` 且实时 `.value` 精确等于 `P4A_LIVE_PASS_20260929_FINAL`，同时 `value_suppressed=false`、`value_truncated=false`。这证明同一 Extension tab handle 上的写入与只读 property readback 已在正式运行态闭环通过，状态更新为 **implemented / test-passed / live-pass**。

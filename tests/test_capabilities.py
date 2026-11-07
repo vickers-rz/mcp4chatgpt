@@ -88,6 +88,13 @@ def test_search_casefold_source_ranking_and_truncation(registry):
     assert ds.call_tool("capability_search", {"query": "pdf", "limit": 1})["structuredContent"]["truncated"]
 
 
+def test_element_state_capability_is_discoverable(registry):
+    got = registry.call_tool("capability_search", {"query": "read current form input value"})["structuredContent"]
+    names = {match["name"] for match in got["matches"]}
+    assert "ext_get_element_state" in names
+    tool = registry.call_tool("capability_get", {"name": "ext_get_element_state"})["structuredContent"]["tool"]
+    assert tool["annotations"]["readOnlyHint"] is True
+
 def test_catalog_refresh_tracks_runtime_downstream_changes(tmp_path):
     manager = FakeDownstream()
     config = replace(make_config(tmp_path), computer_mode="off", tool_exposure="full")

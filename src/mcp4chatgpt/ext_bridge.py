@@ -36,6 +36,7 @@ _loop: asyncio.AbstractEventLoop | None = None
 _websocket: Any | None = None          # active websocket connection
 _pending: dict[str, asyncio.Future[Any]] = {}  # id → Future
 _connected_at: float | None = None
+_connection_generation: str | None = None
 _client_info: dict[str, Any] = {}
 _bridge_token: str = ""
 _bridge_lock = threading.Lock()
@@ -60,12 +61,49 @@ def _verify_token(token: str) -> bool:
     return hmac.compare_digest(token, _bridge_token)
 
 
+def _normalize_protocol_revision(value: Any) -> int:
+    try:
+        revision = int(value)
+    except (TypeError, ValueError):
+        return 1
+    return revision if 1 <= revision <= 10_000 else 1
+
+
+def _normalize_supported_commands(value: Any) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    commands: list[str] = []
+    for item in value[:256]:
+        if not isinstance(item, str):
+            continue
+        command = item.strip()
+        if not command or len(command) > 128 or command in commands:
+            continue
+        commands.append(command)
+    return commands
+
+
+def command_support(command: str) -> bool | None:
+    """Return advertised support for a bridge command.
+
+    None means the connected extension uses the legacy handshake and did not
+    advertise a command set.
+    """
+    with _bridge_lock:
+        if _websocket is None:
+            return None
+        commands = _client_info.get("supported_commands")
+        if not isinstance(commands, list):
+            return None
+        return command in commands
+
+
 # ---------------------------------------------------------------------------
 # WebSocket handler
 # ---------------------------------------------------------------------------
 
 async def _handler(websocket: Any) -> None:
-    global _websocket, _connected_at, _client_info
+    global _websocket, _connected_at, _connection_generation, _client_info
 
     # --- Handshake: first message must be {"type":"auth","token":"..."} -----
     try:
@@ -92,9 +130,14 @@ async def _handler(websocket: Any) -> None:
     with _bridge_lock:
         _websocket = websocket
         _connected_at = time.time()
+        _connection_generation = uuid.uuid4().hex
+        supported_commands = _normalize_supported_commands(msg.get("supportedCommands"))
         _client_info = {
             "version": str(msg.get("version", "")),
             "platform": str(msg.get("platform", "")),
+            "protocol_revision": _normalize_protocol_revision(msg.get("protocolRevision")),
+            "supported_commands": supported_commands,
+            "capabilities_advertised": supported_commands is not None,
         }
 
     log.info("ext_bridge: extension connected (version=%s)", _client_info.get("version"))
@@ -139,6 +182,8 @@ async def _handler(websocket: Any) -> None:
             if _websocket is websocket:
                 _websocket = None
                 _connected_at = None
+                _connection_generation = None
+                _client_info = {}
         # Cancel all pending futures
         for fut in list(_pending.values()):
             if not fut.done():
@@ -171,6 +216,7 @@ def connection_info() -> dict[str, Any]:
         return {
             "connected": True,
             "connected_at": _connected_at,
+            "connection_generation": _connection_generation,
             "uptime_sec": round(time.time() - (_connected_at or time.time()), 1),
             **_client_info,
         }

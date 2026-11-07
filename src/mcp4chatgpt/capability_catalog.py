@@ -44,10 +44,12 @@ _CATEGORY_MEMBERS: dict[str, frozenset[str]] = {
     "files": frozenset({
         "local_list_files", "local_read_text", "local_expose_file",
         "local_write_file", "local_apply_patch",
+        "local_strict_write_file", "local_strict_apply_patch",
+        "local_operation_status", "local_operation_reconcile",
     }),
     "jobs": frozenset({
         "local_start_job", "local_job_status", "local_job_logs",
-        "local_list_jobs", "local_cancel_job",
+        "local_list_jobs", "local_cancel_job", "local_job_operation_status",
         "ext_start_js_job", "ext_get_job", "ext_get_job_result", "ext_cancel_job",
     }),
     "shell": frozenset({
@@ -56,13 +58,18 @@ _CATEGORY_MEMBERS: dict[str, frozenset[str]] = {
     "git": frozenset({
         "local_git_status", "local_git_diff", "local_git_log", "local_git_show",
     }),
+    "workspace": frozenset({
+        "coding_task_read_file", "coding_task_write_file", "coding_task_apply_patch",
+        "local_worktree_create", "local_worktree_status", "local_worktree_list", "local_worktree_remove",
+        "coding_task_create", "coding_task_inspect", "coding_task_validate", "coding_task_reconcile_validation", "coding_task_publish", "coding_task_integrate",
+    }),
     "browser": frozenset({
         "chrome_list_tabs", "chrome_get_active_tab_context",
         "browser_list_tabs", "browser_current_tab", "browser_get_page_text",
         "browser_get_selection", "browser_get_links",
         "search_web", "read_webpage",
         "ext_connection_status", "ext_list_tabs", "ext_get_active_tab",
-        "ext_get_dom", "ext_get_selection", "ext_screenshot", "ext_navigate",
+        "ext_get_dom", "ext_get_element_state", "ext_get_selection", "ext_screenshot", "ext_navigate",
         "ext_click_element", "ext_fill_input", "ext_run_js",
         "ext_listen_changes", "ext_search_web", "ext_read_webpage",
         "ext_web_rag", "ext_archive_webpage",
@@ -74,6 +81,14 @@ _CATEGORY_MEMBERS: dict[str, frozenset[str]] = {
 
 
 _KEYWORDS: dict[str, tuple[str, ...]] = {
+    "local_strict_write_file": ('strict', 'write', '严格写入', '幂等写入'),
+    "local_strict_apply_patch": ('file', 'patch', 'strict', '文件', '补丁'),
+    "local_operation_status": ('operation', 'status', '操作', '状态'),
+    "local_operation_reconcile": ('operation', 'recovery', 'reconcile', '操作', '恢复'),
+    "local_job_operation_status": ('job', 'operation', 'status', '任务', '操作', '状态'),
+    "coding_task_read_file": ('coding', 'task', 'file', 'read', '编码', '任务', '文件', '读取'),
+    "coding_task_write_file": ('coding', 'task', 'write', '编码任务', '任务文件', '任务写入'),
+    "coding_task_apply_patch": ('coding', 'task', 'patch', '编码', '任务', '补丁'),
     "pdf_inspect": ("pdf", "read", "inspect", "metadata", "pages", "读取", "阅读", "元数据"),
     "pdf_search_text": ("pdf", "search", "text", "find", "查找", "搜索", "文本"),
     "pdf_redact_text": ("pdf", "edit", "redact", "remove", "编辑", "修改", "脱敏", "删除文本"),
@@ -88,6 +103,16 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
     "local_job_logs": ("job", "background", "logs", "stdout", "stderr", "后台任务", "日志"),
     "local_list_jobs": ("job", "background", "list", "后台任务", "任务列表"),
     "local_cancel_job": ("job", "background", "cancel", "stop", "后台任务", "取消", "停止"),
+    "local_worktree_create": ("worktree", "git", "workspace", "isolate", "branch", "工作区", "分支", "创建工作区", "隔离"),
+    "local_worktree_status": ("worktree", "git", "workspace", "status", "dirty", "工作区", "状态", "检查"),
+    "local_worktree_list": ("worktree", "git", "workspace", "list", "工作区", "列表"),
+    "local_worktree_remove": ("worktree", "git", "workspace", "remove", "delete", "clean", "工作区", "删除", "移除", "清理"),
+    "coding_task_create": ("coding", "task", "worktree", "baseline", "isolate", "代码任务", "基线", "隔离"),
+    "coding_task_inspect": ("coding", "task", "inspect", "validation", "artifact", "代码任务", "检查", "验证"),
+    "coding_task_validate": ("coding", "task", "validate", "test", "candidate commit", "evidence", "代码任务", "验证", "测试", "候选提交"),
+    "coding_task_reconcile_validation": ("coding", "task", "reconcile", "validation", "uncertain", "abandon", "代码任务", "验证", "恢复", "核对"),
+    "coding_task_publish": ("coding", "task", "publish", "git ref", "cas", "artifact", "代码任务", "发布", "成果引用", "冲突"),
+    "coding_task_integrate": ("coding", "task", "integrate", "fast-forward", "source checkout", "expected commit", "代码任务", "集成", "快进", "源工作区"),
     "capability_search": ("discovery", "search", "tool search", "capability", "发现", "检索", "工具搜索"),
     "capability_get": ("discovery", "schema", "definition", "capability", "发现", "定义", "模式"),
     "capability_list": ("discovery", "catalog", "inventory", "list", "发现", "目录", "清单"),
@@ -111,6 +136,10 @@ _KEYWORDS: dict[str, tuple[str, ...]] = {
     "ext_list_tabs": ("browser", "chrome extension", "tabs", "浏览器扩展", "标签页"),
     "ext_get_active_tab": ("browser", "chrome extension", "active tab", "浏览器扩展", "当前标签页"),
     "ext_get_dom": ("browser", "chrome extension", "dom", "浏览器扩展", "页面结构"),
+    "ext_get_element_state": (
+        "browser", "chrome extension", "element state", "input value", "form value",
+        "browser state", "浏览器扩展", "元素状态", "输入值", "表单值",
+    ),
     "ext_get_selection": ("browser", "chrome extension", "selection", "浏览器扩展", "选中文本"),
     "ext_screenshot": ("browser", "chrome extension", "screenshot", "浏览器扩展", "截图"),
     "ext_navigate": ("browser", "chrome extension", "navigate", "浏览器扩展", "导航"),
@@ -154,14 +183,14 @@ _EXAMPLES: dict[str, tuple[dict[str, Any], ...]] = {
          "timeout_sec": 900},
     ),
     "local_job_status": (
-        {"job_id": "0123456789abcdef0123456789abcdef"},
+        {"job_id": "job_0123456789abcdef01234567"},
     ),
     "local_job_logs": (
-        {"job_id": "0123456789abcdef0123456789abcdef", "stdout_offset": 0,
+        {"job_id": "job_0123456789abcdef01234567", "stdout_offset": 0,
          "stderr_offset": 0, "max_bytes": 16384},
     ),
     "local_cancel_job": (
-        {"job_id": "0123456789abcdef0123456789abcdef", "grace_sec": 2},
+        {"job_id": "job_0123456789abcdef01234567", "grace_sec": 2},
     ),
     "capability_search": (
         {"query": "PDF 编辑", "limit": 5},

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import ExitStack
 import os
 import signal
 import subprocess
@@ -31,7 +32,7 @@ def _store(config: Config) -> JobStore:
     return JobStore(Path(config.data_dir) / "local-jobs")
 
 
-def _validate_operation_id(operation_id: str) -> str:
+def validate_operation_id(operation_id: str) -> str:
     value = str(operation_id).strip()
     if not value:
         raise ValueError("operation_id_required")
@@ -120,6 +121,66 @@ def _augment_status(store: JobStore, metadata: dict[str, Any]) -> dict[str, Any]
     return result
 
 
+def _authorize_scope(
+    metadata: dict[str, Any],
+    *,
+    job_id: str,
+    expected_principal_hash: str | None,
+) -> None:
+    if expected_principal_hash is None:
+        return
+    scope = metadata.get("scope")
+    if scope is None:
+        # Legacy jobs predate principal binding; preserve historical access.
+        return
+    if not isinstance(scope, dict) or scope.get("principal_hash") != expected_principal_hash:
+        raise ValueError(f"job_not_found: {job_id}")
+
+
+def _existing_operation_result(
+    store: JobStore,
+    *,
+    reservation_id: str,
+    public_operation_id: str,
+    fingerprint: str | None,
+) -> dict[str, Any] | None:
+    existing = store.read_operation(reservation_id)
+    if existing is None:
+        return None
+    if fingerprint is not None and existing.get("fingerprint") != fingerprint:
+        raise ValueError(
+            "idempotency_conflict: operation_id already belongs to "
+            "a different job request"
+        )
+
+    existing_job_id = str(existing["job_id"])
+    try:
+        metadata = store.read_metadata(existing_job_id)
+    except ValueError as exc:
+        if not str(exc).startswith("job_not_found:"):
+            raise
+        return {
+            "schema_version": 1,
+            "job_id": existing_job_id,
+            "operation_id": public_operation_id,
+            "fingerprint": existing.get("fingerprint"),
+            "state": "reserved",
+            "operation_state": existing.get("state", "reserved"),
+            "replayed": True,
+            "launched": False,
+            "supervisor_alive": False,
+            "child_alive": False,
+            "process_alive": False,
+            "orphaned": True,
+            "recovery": "explicit_repair_required",
+        }
+    return {
+        **_augment_status(store, metadata),
+        "replayed": True,
+        "launched": False,
+    }
+
+
 def start_job(
     config: Config,
     *,
@@ -127,14 +188,18 @@ def start_job(
     command: str,
     cwd: str | None = None,
     timeout_sec: int = 900,
+    reservation_id: str | None = None,
+    scope_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Start once for one operation_id/fingerprint pair.
 
-    If the caller retries an uncertain start with the same request, the existing
-    job is returned and no second process is spawned.
+    reservation_id is an internal scope key used by authenticated MCP entry
+    points. Direct callers that omit it retain the legacy global operation_id
+    namespace.
     """
 
-    operation_id = _validate_operation_id(operation_id)
+    operation_id = validate_operation_id(operation_id)
+    reservation_id = validate_operation_id(reservation_id or operation_id)
     command = validate_command(command, personal_full_access=getattr(config, "personal_full_access", False))
     resolved_cwd = resolve_allowed_path(
         cwd or ".",
@@ -154,45 +219,30 @@ def start_job(
     )
     store = _store(config)
 
-    with store.operation_lock(operation_id):
-        existing = store.read_operation(operation_id)
+    with ExitStack() as locks:
+        # Always lock/check the legacy public key first. During an upgrade this
+        # prevents a scoped request from duplicating work already reserved by an
+        # older server that only knew the caller-supplied operation_id.
+        locks.enter_context(store.operation_lock(operation_id))
+        if reservation_id != operation_id:
+            legacy = _existing_operation_result(
+                store,
+                reservation_id=operation_id,
+                public_operation_id=operation_id,
+                fingerprint=fingerprint,
+            )
+            if legacy is not None:
+                return legacy
+            locks.enter_context(store.operation_lock(reservation_id))
+
+        existing = _existing_operation_result(
+            store,
+            reservation_id=reservation_id,
+            public_operation_id=operation_id,
+            fingerprint=fingerprint,
+        )
         if existing is not None:
-            if existing.get("fingerprint") != fingerprint:
-                raise ValueError(
-                    "idempotency_conflict: operation_id already belongs to "
-                    "a different job request"
-                )
-
-            existing_job_id = str(existing["job_id"])
-            try:
-                metadata = store.read_metadata(existing_job_id)
-            except ValueError as exc:
-                if not str(exc).startswith("job_not_found:"):
-                    raise
-                # A crash may have happened after the durable operation
-                # reservation but before job metadata was committed. Treat
-                # that as an uncertain start and never spawn implicitly.
-                return {
-                    "schema_version": 1,
-                    "job_id": existing_job_id,
-                    "operation_id": operation_id,
-                    "fingerprint": fingerprint,
-                    "state": "reserved",
-                    "operation_state": existing.get("state", "reserved"),
-                    "replayed": True,
-                    "launched": False,
-                    "supervisor_alive": False,
-                    "child_alive": False,
-                    "process_alive": False,
-                    "orphaned": True,
-                    "recovery": "explicit_repair_required",
-                }
-
-            return {
-                **_augment_status(store, metadata),
-                "replayed": True,
-                "launched": False,
-            }
+            return existing
 
         job_id = "job_" + uuid.uuid4().hex[:24]
         created_at = _iso_now()
@@ -207,6 +257,8 @@ def start_job(
             "timeout_sec": timeout_sec,
             "created_at": created_at,
         }
+        if scope_metadata is not None:
+            metadata["scope"] = dict(scope_metadata)
         request = {
             "command": command,
             "cwd": str(resolved_cwd),
@@ -215,7 +267,7 @@ def start_job(
         }
         store.create_job(
             job_id=job_id,
-            operation_id=operation_id,
+            operation_id=reservation_id,
             fingerprint=fingerprint,
             metadata=metadata,
             request=request,
@@ -280,11 +332,52 @@ def start_job(
     }
 
 
-def job_status(config: Config, job_id: str) -> dict[str, Any]:
+def job_operation_status(
+    config: Config,
+    *,
+    operation_id: str,
+    reservation_id: str | None = None,
+) -> dict[str, Any]:
+    """Observe one durable job by operation identity without executing it."""
+
+    operation_id = validate_operation_id(operation_id)
+    reservation_id = validate_operation_id(reservation_id or operation_id)
+    store = _store(config)
+
+    result = _existing_operation_result(
+        store,
+        reservation_id=reservation_id,
+        public_operation_id=operation_id,
+        fingerprint=None,
+    )
+    if result is None and reservation_id != operation_id:
+        result = _existing_operation_result(
+            store,
+            reservation_id=operation_id,
+            public_operation_id=operation_id,
+            fingerprint=None,
+        )
+    if result is None:
+        raise ValueError(f"job_operation_not_found: {operation_id}")
+    return result
+
+
+def job_status(
+    config: Config,
+    job_id: str,
+    *,
+    expected_principal_hash: str | None = None,
+) -> dict[str, Any]:
     """Observe one job without launching, retrying, or cancelling anything."""
 
     store = _store(config)
-    return _augment_status(store, store.read_metadata(job_id))
+    metadata = store.read_metadata(job_id)
+    _authorize_scope(
+        metadata,
+        job_id=job_id,
+        expected_principal_hash=expected_principal_hash,
+    )
+    return _augment_status(store, metadata)
 
 
 def job_logs(
@@ -294,11 +387,17 @@ def job_logs(
     stdout_offset: int = 0,
     stderr_offset: int = 0,
     max_bytes: int = 16_384,
+    expected_principal_hash: str | None = None,
 ) -> dict[str, Any]:
     """Read retained logs from explicit cursors without mutating job state."""
 
     store = _store(config)
     metadata = store.read_metadata(job_id)
+    _authorize_scope(
+        metadata,
+        job_id=job_id,
+        expected_principal_hash=expected_principal_hash,
+    )
     return {
         "job_id": job_id,
         "state": metadata.get("state"),
@@ -317,14 +416,24 @@ def job_logs(
     }
 
 
-def list_jobs(config: Config, limit: int = 50) -> dict[str, Any]:
+def list_jobs(
+    config: Config,
+    limit: int = 50,
+    *,
+    expected_principal_hash: str | None = None,
+) -> dict[str, Any]:
     store = _store(config)
-    return {
-        "jobs": [
-            _augment_status(store, metadata)
-            for metadata in store.list_jobs(limit)
-        ]
-    }
+    visible: list[dict[str, Any]] = []
+    for metadata in store.list_jobs(limit):
+        scope = metadata.get("scope")
+        if (
+            expected_principal_hash is not None
+            and isinstance(scope, dict)
+            and scope.get("principal_hash") != expected_principal_hash
+        ):
+            continue
+        visible.append(_augment_status(store, metadata))
+    return {"jobs": visible}
 
 
 def cancel_job(
@@ -332,11 +441,17 @@ def cancel_job(
     job_id: str,
     *,
     grace_sec: float = 2.0,
+    expected_principal_hash: str | None = None,
 ) -> dict[str, Any]:
     """Explicitly request cancellation; status/log observation never calls this."""
 
     store = _store(config)
     metadata = store.read_metadata(job_id)
+    _authorize_scope(
+        metadata,
+        job_id=job_id,
+        expected_principal_hash=expected_principal_hash,
+    )
     if metadata.get("state") in TERMINAL_STATES:
         return {
             **_augment_status(store, metadata),

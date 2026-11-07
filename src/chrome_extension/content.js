@@ -22,8 +22,13 @@
   let observer = null;
   let observerDebounce = null;
   let observing = false;
+  let observerStop = null;
+  let observerExpiresAt = 0;
 
   function startObserver(durationMs) {
+    observerExpiresAt = Math.max(observerExpiresAt, Date.now() + durationMs);
+    if (observerStop) clearTimeout(observerStop);
+    observerStop = setTimeout(() => stopObserver(), observerExpiresAt - Date.now());
     if (observing) return;
     observing = true;
 
@@ -46,14 +51,14 @@
       characterData: true,
       attributes: false,
     });
-
-    // Auto-stop after duration
-    setTimeout(() => stopObserver(), durationMs);
   }
 
   function stopObserver() {
     if (!observing) return;
     observing = false;
+    if (observerStop) clearTimeout(observerStop);
+    observerStop = null;
+    observerExpiresAt = 0;
     if (observer) { observer.disconnect(); observer = null; }
     if (observerDebounce) { clearTimeout(observerDebounce); observerDebounce = null; }
   }

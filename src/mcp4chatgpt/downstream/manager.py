@@ -16,6 +16,7 @@ from copy import deepcopy
 from typing import Any
 
 from .client import StdioMCPClient, StdioMCPClientError
+from .http_client import HttpMCPClient
 from .config import load_downstream_configs
 from .models import (
     DownstreamConfig,
@@ -38,7 +39,7 @@ class DownstreamMCPManager:
 
     def __init__(self) -> None:
         self._catalog_lock = threading.RLock()
-        self._clients: dict[str, StdioMCPClient] = {}
+        self._clients: dict[str, StdioMCPClient | HttpMCPClient] = {}
         self._configs: dict[str, DownstreamConfig] = {}
         self._tools: dict[str, DownstreamToolInfo] = {}  # namespaced_name -> info
         self._states: dict[str, DownstreamState] = {}
@@ -76,7 +77,7 @@ class DownstreamMCPManager:
                 continue
             seen_namespaces.add(cfg.namespace)
 
-            if cfg.transport != "stdio":
+            if cfg.transport not in {"stdio", "http"}:
                 self._states[cfg.id] = DownstreamState.FAILED
                 self._errors[cfg.id] = f"unsupported transport: {cfg.transport}"
                 log.warning(
@@ -84,7 +85,11 @@ class DownstreamMCPManager:
                     cfg.id, cfg.transport,
                 )
                 continue
-            if not cfg.command:
+            if cfg.transport == "http" and (not cfg.url or not cfg.allow_tools):
+                self._states[cfg.id] = DownstreamState.FAILED
+                self._errors[cfg.id] = "http downstream requires url and explicit allow_tools"
+                continue
+            if cfg.transport == "stdio" and not cfg.command:
                 self._states[cfg.id] = DownstreamState.DEGRADED
                 self._errors[cfg.id] = "enabled stdio downstream requires a command"
                 log.warning("downstream manager: %r has no command", cfg.id)
@@ -96,15 +101,14 @@ class DownstreamMCPManager:
         """Start a single downstream MCP. Captures errors, never raises."""
         self._states[cfg.id] = DownstreamState.STARTING
         try:
-            client = StdioMCPClient(
-                downstream_id=cfg.id,
-                command=cfg.command,
-                args=cfg.args,
-                cwd=cfg.cwd or None,
-                env=cfg.env or None,
-                startup_timeout=cfg.startup_timeout,
-                call_timeout=cfg.call_timeout,
-            )
+            client = (HttpMCPClient(
+                downstream_id=cfg.id, url=cfg.url,
+                bearer_token_env=cfg.bearer_token_env, call_timeout=cfg.call_timeout,
+            ) if cfg.transport == "http" else StdioMCPClient(
+                downstream_id=cfg.id, command=cfg.command, args=cfg.args,
+                cwd=cfg.cwd or None, env=cfg.env or None,
+                startup_timeout=cfg.startup_timeout, call_timeout=cfg.call_timeout,
+            ))
             client.start()
 
             with self._catalog_lock:
@@ -129,11 +133,14 @@ class DownstreamMCPManager:
             )
 
     def _register_tools(
-        self, cfg: DownstreamConfig, client: StdioMCPClient,
+        self, cfg: DownstreamConfig, client: StdioMCPClient | HttpMCPClient,
     ) -> None:
         """Register downstream tools with namespace prefix and filtering."""
         replacement: dict[str, DownstreamToolInfo] = {}
-        instance_id, tools = client.catalog_snapshot()
+        if isinstance(client, HttpMCPClient):
+            instance_id, tools = client.cached_catalog_snapshot()
+        else:
+            instance_id, tools = client.catalog_snapshot()
         for tool in tools:
             original_name = tool.get("name", "")
             if not original_name:
@@ -200,7 +207,13 @@ class DownstreamMCPManager:
         """Return all registered downstream tools."""
         with self._catalog_lock:
             for ds_id, client in self._clients.items():
-                self._register_tools(self._configs[ds_id], client)
+                try:
+                    self._register_tools(self._configs[ds_id], client)
+                except Exception as exc:
+                    self._states[ds_id] = DownstreamState.DEGRADED
+                    self._errors[ds_id] = f"catalog_refresh_failed:{type(exc).__name__}"
+                    self._tools = {name: info for name, info in self._tools.items()
+                                   if info.downstream_id != ds_id}
             return deepcopy(list(self._tools.values()))
 
     def has_tool(self, namespaced_name: str) -> bool:
@@ -244,11 +257,17 @@ class DownstreamMCPManager:
                 f"Downstream {info.downstream_id!r} is unavailable: {detail}"
             )
 
+        cfg = self._configs[info.downstream_id]
+        if info.original_name == "capability_call" and cfg.transport == "http":
+            target = arguments.get("name") if isinstance(arguments, dict) else None
+            if target not in (cfg.allow_capability_targets or []):
+                raise StdioMCPClientError("capability_target_not_allowed")
         try:
             if isinstance(client, StdioMCPClient):
                 return client.call_tool(info.original_name, arguments,
                                         expected_instance_id=info.backend_instance_id)
-            return client.call_tool(info.original_name, arguments)
+            return client.call_tool(info.original_name, arguments,
+                                    expected_instance_id=info.backend_instance_id)
         except StdioMCPClientError as exc:
             # A single tool-level JSON-RPC error does not necessarily mean the
             # process is unhealthy.  Mark degraded only when the process died.
@@ -272,6 +291,10 @@ class DownstreamMCPManager:
                 self._errors[ds_id] = (
                     client.transport_error or "downstream process/transport is unavailable"
                 )[:1000]
+            last_error = self._errors.get(ds_id)
+            if isinstance(client, HttpMCPClient) and client.transport_error:
+                state = DownstreamState.DEGRADED
+                last_error = client.transport_error
             status = DownstreamStatus(
                 id=ds_id,
                 name=cfg.name,
@@ -283,7 +306,7 @@ class DownstreamMCPManager:
                     1 for t in tools
                     if t.downstream_id == ds_id
                 ),
-                last_error=self._errors.get(ds_id),
+                last_error=last_error,
                 started_at=client.started_at if client else None,
             )
             record = status.to_dict()

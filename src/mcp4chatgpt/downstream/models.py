@@ -23,7 +23,9 @@ class DownstreamConfig:
     id: str
     name: str = ""
     enabled: bool = True
-    transport: str = "stdio"  # "stdio" for now; "http" reserved for future
+    transport: str = "stdio"
+    url: str = ""
+    bearer_token_env: str = ""
     command: str = ""
     args: list[str] = field(default_factory=list)
     cwd: str = ""
@@ -32,6 +34,7 @@ class DownstreamConfig:
     call_timeout: float = 60.0
     allow_tools: list[str] | None = None   # None = allow all
     deny_tools: list[str] | None = None    # None = deny none
+    allow_capability_targets: list[str] | None = None
     namespace: str = ""  # defaults to id if empty
 
     def __post_init__(self) -> None:

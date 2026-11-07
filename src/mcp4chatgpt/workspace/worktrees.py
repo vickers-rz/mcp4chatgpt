@@ -104,9 +104,14 @@ def _worktree_entries(repo: Path) -> dict[Path, dict[str, str]]:
     return entries
 
 
-def _managed_root(repo: Path) -> Path:
+def _managed_root(config: Config, repo: Path) -> Path:
     repo_hash = hashlib.sha256(str(repo).encode("utf-8")).hexdigest()[:12]
-    return repo.parent / ".mcp4chatgpt-worktrees" / f"{repo.name}-{repo_hash}"
+    return (
+        Path(config.data_dir).expanduser().resolve()
+        / "managed-worktrees"
+        / "checkouts"
+        / f"{repo.name}-{repo_hash}"
+    )
 
 
 def _fingerprint(repo: Path, base_commit: str) -> str:
@@ -161,23 +166,37 @@ def create_worktree(
     operation_id: str,
     cwd: str,
     base_ref: str = "HEAD",
+    reservation_id: str | None = None,
+    scope_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Create one detached managed worktree from an exact clean-source commit."""
 
     operation_id = _validate_operation_id(operation_id)
+    reservation_id = _validate_operation_id(reservation_id or operation_id)
     repo = _source_repo(config, cwd)
     base_commit = _resolve_commit(repo, base_ref)
     fingerprint = _fingerprint(repo, base_commit)
     store = _store(config)
 
-    with store.operation_lock(operation_id):
-        existing = store.read_operation(operation_id)
+    # Scoped callers use the reservation id as the sole idempotency key.
+    # Do not probe the public operation id first: doing so would let an
+    # authenticated scoped request replay or conflict with legacy unscoped
+    # reservations created before principal/workspace scoping existed.
+    with store.operation_lock(reservation_id):
+        existing = store.read_operation(reservation_id)
         if existing is not None:
             if existing.get("fingerprint") != fingerprint:
                 raise ValueError(
                     "idempotency_conflict: operation_id already belongs to "
                     "a different worktree request"
                 )
+
+            owner = (scope_metadata or {}).get("coding_task_key")
+            recorded_owner = (existing.get("scope") or {}).get("coding_task_key")
+            if recorded_owner is not None and recorded_owner != owner:
+                raise ValueError("worktree_operation_owner_conflict")
+            if owner is not None and recorded_owner is None:
+                store.update_operation(reservation_id, {"scope": scope_metadata})
 
             worktree_id = str(existing["worktree_id"])
             try:
@@ -199,9 +218,11 @@ def create_worktree(
                         "created_at": existing.get("created_at") or _iso_now(),
                         "recovered_from_reserved": True,
                     }
+                    if scope_metadata is not None:
+                        record["scope"] = scope_metadata
                     store.write_record(record)
                     store.update_operation(
-                        operation_id,
+                        reservation_id,
                         {"state": "active", "recovered_at": _iso_now()},
                     )
                     return {
@@ -226,6 +247,14 @@ def create_worktree(
                     "recovery": "explicit_repair_required",
                 }
 
+            if owner is not None:
+                with store.worktree_lock(worktree_id):
+                    record = store.read_record(worktree_id)
+                    if record.get("state") != "active":
+                        raise ValueError("coding_task_worktree_not_active")
+                    record["scope"] = scope_metadata
+                    store.write_record(record)
+
             return {
                 **_observed_record(record),
                 "replayed": True,
@@ -241,18 +270,20 @@ def create_worktree(
             )
 
         worktree_id = "wt_" + uuid.uuid4().hex[:24]
-        destination = (_managed_root(repo) / worktree_id).resolve()
+        destination = (_managed_root(config, repo) / worktree_id).resolve()
         created_at = _iso_now()
         store.reserve_operation(
+            reservation_id=reservation_id,
             operation_id=operation_id,
             fingerprint=fingerprint,
             worktree_id=worktree_id,
             source_repo=repo,
             base_commit=base_commit,
             destination=destination,
+            scope_metadata=scope_metadata,
         )
         store.update_operation(
-            operation_id,
+            reservation_id,
             {"created_at": created_at, "base_ref": base_ref},
         )
 
@@ -274,7 +305,7 @@ def create_worktree(
             # Do not retry automatically after an uncertain Git mutation. The
             # durable reservation gives an explicit reconciliation handle.
             store.update_operation(
-                operation_id,
+                reservation_id,
                 {
                     "state": "uncertain",
                     "error": redact(str(exc)),
@@ -297,9 +328,11 @@ def create_worktree(
             "state": "active",
             "created_at": created_at,
         }
+        if scope_metadata is not None:
+            record["scope"] = scope_metadata
         store.write_record(record)
         store.update_operation(
-            operation_id,
+            reservation_id,
             {"state": "active", "activated_at": _iso_now()},
         )
         return {
@@ -310,25 +343,102 @@ def create_worktree(
         }
 
 
-def worktree_status(config: Config, worktree_id: str) -> dict[str, Any]:
+def worktree_status(
+    config: Config,
+    worktree_id: str,
+    *,
+    expected_principal_hash: str | None = None,
+    expected_workspace_id: str | None = None,
+    strict_scope: bool = False,
+) -> dict[str, Any]:
     store = _store(config)
-    return _observed_record(store.read_record(worktree_id))
+    record = store.read_record(worktree_id)
+    scope = record.get("scope")
+    if strict_scope:
+        if not isinstance(scope, dict):
+            raise ValueError(f"worktree_not_found: {worktree_id}")
+        if expected_principal_hash is not None and scope.get("principal_hash") != expected_principal_hash:
+            raise ValueError(f"worktree_not_found: {worktree_id}")
+        if expected_workspace_id is not None and scope.get("workspace_id") != expected_workspace_id:
+            raise ValueError(f"worktree_not_found: {worktree_id}")
+    else:
+        if expected_principal_hash is not None:
+            rec_hash = scope.get("principal_hash") if isinstance(scope, dict) else None
+            if rec_hash is not None and rec_hash != expected_principal_hash:
+                raise ValueError(f"worktree_not_found: {worktree_id}")
+        if expected_workspace_id is not None:
+            rec_ws = scope.get("workspace_id") if isinstance(scope, dict) else None
+            if rec_ws is not None and rec_ws != expected_workspace_id:
+                raise ValueError(f"worktree_not_found: {worktree_id}")
+    return _observed_record(record)
 
 
-def list_worktrees(config: Config, limit: int = 50) -> dict[str, Any]:
+def list_worktrees(
+    config: Config,
+    limit: int = 50,
+    cursor: str | None = None,
+    *,
+    expected_principal_hash: str | None = None,
+    expected_workspace_id: str | None = None,
+    strict_scope: bool = False,
+) -> dict[str, Any]:
     limit = max(1, min(int(limit), 200))
     store = _store(config)
+    records = store.list_records()
+
+    filtered: list[dict[str, Any]] = []
+    for r in records:
+        scope = r.get("scope")
+        if strict_scope:
+            if not isinstance(scope, dict):
+                continue
+            if expected_principal_hash is not None and scope.get("principal_hash") != expected_principal_hash:
+                continue
+            if expected_workspace_id is not None and scope.get("workspace_id") != expected_workspace_id:
+                continue
+        else:
+            if expected_principal_hash is not None:
+                rec_hash = scope.get("principal_hash") if isinstance(scope, dict) else None
+                if rec_hash not in (None, expected_principal_hash):
+                    continue
+            if expected_workspace_id is not None:
+                rec_ws = scope.get("workspace_id") if isinstance(scope, dict) else None
+                if rec_ws not in (None, expected_workspace_id):
+                    continue
+        filtered.append(r)
+
+    start_idx = 0
+    if cursor is not None:
+        cursor_str = str(cursor).strip()
+        if cursor_str:
+            for idx, r in enumerate(filtered):
+                if str(r.get("worktree_id")) == cursor_str:
+                    start_idx = idx + 1
+                    break
+            else:
+                raise ValueError(f"invalid_cursor: {cursor_str}")
+
+    page = filtered[start_idx : start_idx + limit]
+    has_more = (start_idx + limit) < len(filtered)
+    next_cursor = page[-1]["worktree_id"] if (has_more and page) else None
+
     return {
         "worktrees": [
             _observed_record(record)
-            for record in store.list_records()[:limit]
-        ]
+            for record in page
+        ],
+        "next_cursor": next_cursor,
+        "has_more": has_more,
     }
 
 
 def remove_worktree(
     config: Config,
     worktree_id: str,
+    *,
+    expected_principal_hash: str | None = None,
+    expected_workspace_id: str | None = None,
+    strict_scope: bool = False,
 ) -> dict[str, Any]:
     """Remove one clean managed worktree; replay after removal is a no-op."""
 
@@ -336,6 +446,27 @@ def remove_worktree(
     worktree_id = store.validate_worktree_id(worktree_id)
     with store.worktree_lock(worktree_id):
         record = store.read_record(worktree_id)
+        scope = record.get("scope")
+        if strict_scope:
+            if not isinstance(scope, dict):
+                raise ValueError(f"worktree_not_found: {worktree_id}")
+            if expected_principal_hash is not None and scope.get("principal_hash") != expected_principal_hash:
+                raise ValueError(f"worktree_not_found: {worktree_id}")
+            if expected_workspace_id is not None and scope.get("workspace_id") != expected_workspace_id:
+                raise ValueError(f"worktree_not_found: {worktree_id}")
+        else:
+            if expected_principal_hash is not None:
+                rec_hash = scope.get("principal_hash") if isinstance(scope, dict) else None
+                if rec_hash is not None and rec_hash != expected_principal_hash:
+                    raise ValueError(f"worktree_not_found: {worktree_id}")
+            if expected_workspace_id is not None:
+                rec_ws = scope.get("workspace_id") if isinstance(scope, dict) else None
+                if rec_ws is not None and rec_ws != expected_workspace_id:
+                    raise ValueError(f"worktree_not_found: {worktree_id}")
+
+        if (scope or {}).get("coding_task_key") or store.task_owns_worktree(worktree_id):
+            raise ValueError("worktree_in_use_by_coding_task")
+
         if record.get("state") == "removed":
             return {
                 **_observed_record(record),
@@ -349,6 +480,7 @@ def remove_worktree(
             )
 
         repo = Path(str(record["source_repo"])).resolve()
+        resolve_allowed_path(str(repo), config.allowed_roots, must_exist=True)
         destination = Path(str(record["path"])).resolve()
         entries = _worktree_entries(repo)
         entry = entries.get(destination)

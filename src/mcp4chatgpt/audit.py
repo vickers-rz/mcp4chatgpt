@@ -4,9 +4,15 @@ import json
 import gzip
 import shutil
 import time
+import os
+import fcntl
+import sys
+import threading
+import tempfile
 from pathlib import Path
 from typing import Any
 
+_AUDIT_LOCK = threading.RLock()
 
 class AuditLogger:
     def __init__(self, path: Path, rotate_bytes: int = 20 * 1024 * 1024, retention_days: int = 30):
@@ -15,12 +21,21 @@ class AuditLogger:
         self.retention_days = max(1, retention_days)
 
     def log(self, event: str, **fields: Any) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._rotate_if_needed()
-        self._cleanup_old_archives()
-        record = {"ts": time.time(), "event": event, **fields}
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            with _AUDIT_LOCK:
+                fd = os.open(str(self.path) + ".lock", os.O_CREAT | os.O_RDWR, 0o600)
+                try:
+                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    self._rotate_if_needed()
+                    self._cleanup_old_archives()
+                    record = {"ts": time.time(), "event": event, **fields}
+                    with self.path.open("a", encoding="utf-8") as fh:
+                        fh.write(json.dumps(record, ensure_ascii=False, default=str) + "\n")
+                finally:
+                    os.close(fd)
+        except OSError as exc:
+            print(f"audit failure at {self.path}: {type(exc).__name__}", file=sys.stderr)
 
     def _rotate_if_needed(self) -> None:
         if not self.path.exists():
@@ -46,9 +61,15 @@ class AuditLogger:
 
     def _gzip_file(self, path: Path) -> None:
         gz_path = path.with_suffix(path.suffix + ".gz")
-        with path.open("rb") as src, gzip.open(gz_path, "wb") as dst:
-            shutil.copyfileobj(src, dst)
-        path.unlink(missing_ok=True)
+        fd, name = tempfile.mkstemp(prefix=".audit-", dir=path.parent)
+        os.close(fd)
+        try:
+            with path.open("rb") as src, gzip.open(name, "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            os.replace(name, gz_path)
+            path.unlink(missing_ok=True)
+        finally:
+            Path(name).unlink(missing_ok=True)
 
     def _cleanup_old_archives(self) -> None:
         cutoff = time.time() - self.retention_days * 86400

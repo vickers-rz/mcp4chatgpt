@@ -4,7 +4,7 @@ set -eu
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 MIN_AGE_SEC=1800
 ACTION="dry-run"
-SERVICE_PATTERN="[m]cp4chatgpt.server"
+SERVICE_PATTERN="[m]cp4chatgpt\.(runtime|server)"
 
 usage() {
   cat <<EOF
