@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import os
+import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -75,6 +76,7 @@ class Config:
     computer_backend: str = "native"
     tool_exposure: str = "full"
     personal_full_access: bool = False
+    static_mcp_token: str = field(default="", repr=False)
 
     @property
     def mcp_url(self) -> str:
@@ -94,6 +96,11 @@ def load_config() -> Config:
     secret = os.environ.get("MCP_AUTH_SECRET", "")
     if not secret or secret == "replace-with-a-long-random-secret":
         secret = secrets.token_urlsafe(32)
+    static_mcp_token = os.environ.get("MCP_STATIC_TOKEN", "")
+    if static_mcp_token and (
+        not re.fullmatch(r"[A-Za-z0-9_-]{32,}", static_mcp_token) or static_mcp_token == secret
+    ):
+        raise ValueError("MCP_STATIC_TOKEN must be a separate URL-safe token of at least 32 characters.")
     default_co_te_path = project_root.parent / "codex_work_with_apps" / "co-te.py"
 
     public_base_url = os.environ.get("MCP_PUBLIC_BASE_URL", "http://127.0.0.1:8766").rstrip("/")
@@ -163,4 +170,5 @@ def load_config() -> Config:
         computer_backend=computer_backend,
         tool_exposure=tool_exposure,
         personal_full_access=personal_full_access,
+        static_mcp_token=static_mcp_token,
     )

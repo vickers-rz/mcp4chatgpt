@@ -199,6 +199,35 @@ During OAuth authorization, enter `MCP_AUTH_SECRET` on the local approval form.
 
 Dynamic registration defaults to `client_secret_post`. Existing clients must send their registered client secret when exchanging a code. Clients that cannot retain a secret can re-register explicitly with `token_endpoint_auth_method: none` and use S256 PKCE. Existing bearer tokens remain valid until their normal expiry.
 
+### Optional static MCP token
+
+Set `MCP_STATIC_TOKEN` in the private `.env` and restart the service to enable a
+second authentication method on `/mcp`. Generate a separate token with
+`openssl rand -hex 32`. The static token has no built-in expiry. Replace or
+remove it and restart to revoke it. Existing OAuth connections continue using
+their own credentials.
+
+With the static token enabled, OAuth clients discover the issuer at
+`/oauth` through `/.well-known/oauth-protected-resource/mcp`, then read
+`/.well-known/oauth-authorization-server/oauth`. Origin-wide discovery URLs
+return 404. A Gemini connection previously associated with OAuth can still
+open the authorization page after a successful static `tools/list`. The
+registration, authorization and token exchange endpoints keep their existing URLs.
+
+Use `Authorization: Bearer <token>` when the client supports headers. For a
+Gemini URL-only connector, enter `https://mcp.example.com/gemini/mcp?mcp_token=<token>` with
+your MCP host and token. Leave OAuth client credentials blank for this method.
+The complete URL is a credential. Use HTTPS and keep it out of shared logs,
+screenshots and messages. The server omits query strings from its HTTP audit
+messages. Reverse proxies and clients manage their own logging.
+
+If Gemini keeps opening the old OAuth account link, and your HTTPS ingress
+already serves this MCP on another port of the same host, create a connection
+using that port, for example `https://mcp.example.com:8443/gemini/mcp?mcp_token=<token>`.
+To verify the connection, select it from the `@` menu in a new Gemini chat,
+ask it to call `capability_search`, and check the audit log for `tools/call`
+with `auth_mode=static_query` followed by a successful `tool_call`.
+
 ### Refreshing ChatGPT tool actions after server changes
 
 ChatGPT keeps an app-side snapshot of the MCP tool/action definitions it has

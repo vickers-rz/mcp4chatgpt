@@ -76,7 +76,9 @@ def test_server_serves_canonical_and_legacy_resource_metadata(tmp_path):
         server.server_close()
 
 
-def _post_http(host: str, port: int, path: str, body: bytes, content_type: str):
+def _post_http(
+    host: str, port: int, path: str, body: bytes, content_type: str, headers: dict[str, str] | None = None,
+):
     conn = http.client.HTTPConnection(host, port, timeout=3)
     try:
         conn.request(
@@ -86,6 +88,7 @@ def _post_http(host: str, port: int, path: str, body: bytes, content_type: str):
             headers={
                 "Content-Type": content_type,
                 "Content-Length": str(len(body)),
+                **(headers or {}),
             },
         )
         response = conn.getresponse()
@@ -96,7 +99,7 @@ def _post_http(host: str, port: int, path: str, body: bytes, content_type: str):
 
 @pytest.mark.parametrize("auth_method", ["client_secret_post", "none"])
 def test_http_oauth_dynamic_registration_pkce_and_bearer_roundtrip(tmp_path, auth_method):
-    config = make_config(tmp_path)
+    config = replace(make_config(tmp_path), static_mcp_token="a" * 64)
     server = create_server(config)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -200,6 +203,84 @@ def test_http_oauth_dynamic_registration_pkce_and_bearer_roundtrip(tmp_path, aut
             assert payload["result"]["serverInfo"]["name"] == "mcp4chatgpt"
         finally:
             conn.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_static_mcp_token_query_and_header(tmp_path, enabled):
+    token = "static-test-token-" + "a" * 48
+    wrong = "invalid-test-token-" + "b" * 48
+    config = replace(make_config(tmp_path), static_mcp_token=token if enabled else "")
+    server = create_server(config)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    host, port = server.server_address
+    headers = {"Accept": "application/json, text/event-stream"}
+    query_path = "/mcp?mcp_token=" + token
+
+    def call(path, method, params=None, authorization=None):
+        request_headers = dict(headers)
+        if authorization:
+            request_headers["Authorization"] = "Bearer " + authorization
+        body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params or {}})
+        return _post_http(host, port, path, body.encode(), "application/json", request_headers)
+
+    try:
+        status, response_headers, _ = call("/mcp", "tools/list")
+        assert status == 401
+        assert "resource_metadata" in response_headers["WWW-Authenticate"]
+        for path in ("/mcp?mcp_token=" + wrong, query_path + "&mcp_token=", "/mcp?mcp_token="):
+            assert call(path, "tools/list")[0] == 401
+        assert call(query_path, "tools/list", authorization=wrong)[0] == 401
+
+        status, _, body = call(query_path, "initialize", {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "static-token-test", "version": "1"},
+        })
+        assert status == (200 if enabled else 401)
+        if enabled:
+            assert json.loads(body)["result"]["serverInfo"]["name"] == "mcp4chatgpt"
+
+        status, _, body = call("/mcp?other='value'&%6Dcp_token=" + token, "tools/list")
+        assert status == (200 if enabled else 401)
+        if enabled:
+            assert any(tool["name"] == "server_info" for tool in json.loads(body)["result"]["tools"])
+
+        status, _, body = call("/mcp", "tools/call", {"name": "server_info"}, authorization=token)
+        assert status == (200 if enabled else 401)
+        if enabled:
+            assert json.loads(body)["result"]["structuredContent"]["tool_catalog"]["listed_count"] > 0
+
+        assert _get(f"http://{host}:{port}{query_path}")[0] == (405 if enabled else 401)
+        static_path = "/gemini/mcp"
+        status, headers_out, _ = call(static_path, "tools/list")
+        assert status == 403
+        assert "WWW-Authenticate" not in headers_out
+        status, _, body = call(static_path + "?mcp_token=" + token, "tools/list")
+        assert status == (200 if enabled else 403)
+        if enabled:
+            assert all("securitySchemes" not in tool for tool in json.loads(body)["result"]["tools"])
+        base = f"http://{host}:{port}"
+        assert _get(base + "/.well-known/oauth-protected-resource" + static_path)[0] == 404
+        for discovery in ("oauth-protected-resource", "oauth-authorization-server"):
+            assert _get(base + "/.well-known/" + discovery)[0] == (404 if enabled else 200)
+        status, _, body = _get(base + "/.well-known/oauth-protected-resource/mcp")
+        assert status == 200
+        expected_issuer = config.public_base_url + ("/oauth" if enabled else "")
+        assert json.loads(body)["authorization_servers"] == [expected_issuer]
+        status, _, body = _get(base + "/.well-known/oauth-authorization-server" + urlparse(expected_issuer).path)
+        assert status == 200
+        assert json.loads(body)["issuer"] == expected_issuer
+        assert json.loads(body)["token_endpoint"] == config.public_base_url + "/oauth/token"
+        audit = config.audit_log.read_text()
+        assert token not in audit
+        assert wrong not in audit
+        assert query_path not in audit
+        requests = [row for line in audit.splitlines() if (row := json.loads(line))["event"] == "mcp_request"]
+        assert {row["auth_mode"] for row in requests} == ({"static_query", "static_bearer"} if enabled else set())
     finally:
         server.shutdown()
         server.server_close()

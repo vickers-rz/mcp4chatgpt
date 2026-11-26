@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hmac
 import json
+import re
 import ssl
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -13,6 +15,7 @@ from .audit import AuditLogger
 from .config import Config, load_config
 from .oauth import (
     create_auth_redirect,
+    issuer,
     issue_token,
     metadata,
     protected_resource_metadata,
@@ -271,11 +274,16 @@ class MCPServer(ThreadingHTTPServer):
     registry: ToolRegistry
 
 
+_STATIC_MCP_PATH = "/gemini/mcp"
+
+
 class Handler(BaseHTTPRequestHandler):
     server: MCPServer
 
     def log_message(self, fmt: str, *args: Any) -> None:
-        self.server.registry.audit.log("http", remote=self.client_address[0], message=fmt % args)
+        # Request-line logging can otherwise record credentials from MCP URLs.
+        message = re.sub(r"\?\S*", "?[redacted]", fmt % args)
+        self.server.registry.audit.log("http", remote=self.client_address[0], message=message)
 
     def do_GET(self) -> None:
         if not _host_allowed(self, self.server.config):
@@ -285,15 +293,21 @@ class Handler(BaseHTTPRequestHandler):
         if parsed.path == "/health":
             _json_response(self, 200, {"ok": True})
             return
-        if parsed.path == "/.well-known/oauth-authorization-server":
+        config = self.server.config
+        # A static connector may probe both origin-wide discovery documents
+        # even after a successful initialize. Advertise OAuth only for /mcp.
+        issuer_metadata_path = "/.well-known/oauth-authorization-server"
+        if config.static_mcp_token:
+            issuer_metadata_path += urlparse(issuer(config)).path
+        if parsed.path == issuer_metadata_path:
             _json_response(self, 200, metadata(self.server.config))
             return
         protected_metadata_path = urlparse(
             _protected_resource_metadata_url(self.server.config)
         ).path
-        if parsed.path in {
-            "/.well-known/oauth-protected-resource", protected_metadata_path,
-        }:
+        if parsed.path == protected_metadata_path or (
+            not config.static_mcp_token and parsed.path == "/.well-known/oauth-protected-resource"
+        ):
             _json_response(self, 200, protected_resource_metadata(self.server.config))
             return
         if parsed.path == "/oauth/authorize":
@@ -312,11 +326,11 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as exc:
                 _json_response(self, 502, {"error": "search_failed", "error_description": str(exc)})
             return
-        if parsed.path == "/mcp":
+        if parsed.path in {"/mcp", _STATIC_MCP_PATH}:
             try:
                 self._client_id()
             except Exception as exc:
-                _auth_required(self, self.server.config, str(exc))
+                self._reject_mcp_auth(str(exc))
                 return
             _empty_response(
                 self,
@@ -349,7 +363,7 @@ class Handler(BaseHTTPRequestHandler):
             if parsed.path == "/oauth/token":
                 _json_response(self, 200, issue_token(self.server.config, _read_json(self)))
                 return
-            if parsed.path == "/mcp":
+            if parsed.path in {"/mcp", _STATIC_MCP_PATH}:
                 self._handle_mcp()
                 return
             if parsed.path == "/search":
@@ -373,12 +387,33 @@ class Handler(BaseHTTPRequestHandler):
         except Exception:
             _json_response(self, 500, {"error": "server_error", "error_description": "An internal error occurred."})
 
+    def _reject_mcp_auth(self, message: str) -> None:
+        if urlparse(self.path).path == _STATIC_MCP_PATH:
+            _json_response(self, 403, {"error": "Static MCP token required."})
+        else:
+            _auth_required(self, self.server.config, message)
+
     def _client_context(self) -> tuple[str, bool, str]:
+        config = self.server.config
+        static_token = config.static_mcp_token
+        parsed = urlparse(self.path)
+        static_only = parsed.path == _STATIC_MCP_PATH
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
-            client_id = verify_token(self.server.config, auth.removeprefix("Bearer ").strip())
-            return client_id, True, "bearer"
-        if self.server.config.local_auth_disabled and _is_local_request(self):
+            bearer = auth.removeprefix("Bearer ").strip()
+            if static_token and hmac.compare_digest(bearer.encode(), static_token.encode()):
+                return "static-mcp", False, "static_bearer"
+            if not static_only:
+                return verify_token(config, bearer), True, "bearer"
+        if static_token:
+            query_tokens = parse_qs(parsed.query, keep_blank_values=True).get("mcp_token")
+            if query_tokens is not None:
+                if len(query_tokens) != 1 or not hmac.compare_digest(query_tokens[0].encode(), static_token.encode()):
+                    raise ValueError("Invalid MCP URL token.")
+                return "static-mcp", False, "static_query"
+        if static_only:
+            raise ValueError("Static MCP token required.")
+        if config.local_auth_disabled and _is_local_request(self):
             return "local-open-webui", False, "local_bypass"
         raise ValueError("Missing Authorization: Bearer token.")
 
@@ -494,7 +529,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             client_id, descriptor_auth_required, auth_mode = self._client_context()
         except Exception as exc:
-            _auth_required(self, self.server.config, str(exc))
+            self._reject_mcp_auth(str(exc))
             return
         request_id = None
         try:

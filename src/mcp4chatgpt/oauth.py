@@ -114,13 +114,14 @@ def _cleanup_expired_codes(now: float | None = None) -> None:
 
 
 def issuer(config: Config) -> str:
-    return config.public_base_url.rstrip("/")
+    base = config.public_base_url.rstrip("/")
+    return base + "/oauth" if config.static_mcp_token else base
 
 
 def metadata(config: Config) -> dict[str, Any]:
-    base = issuer(config)
+    base = config.public_base_url.rstrip("/")
     return {
-        "issuer": base,
+        "issuer": issuer(config),
         "authorization_endpoint": f"{base}/oauth/authorize",
         "token_endpoint": f"{base}/oauth/token",
         "registration_endpoint": f"{base}/oauth/register",
@@ -133,10 +134,9 @@ def metadata(config: Config) -> dict[str, Any]:
 
 
 def protected_resource_metadata(config: Config) -> dict[str, Any]:
-    base = issuer(config)
     return {
-        "resource": f"{base}/mcp",
-        "authorization_servers": [base],
+        "resource": config.mcp_url,
+        "authorization_servers": [issuer(config)],
         "bearer_methods_supported": ["header"],
         "scopes_supported": ["local", "web", "knowledge"],
     }

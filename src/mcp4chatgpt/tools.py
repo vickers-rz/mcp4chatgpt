@@ -1402,7 +1402,8 @@ class ToolRegistry:
                 "capability_get",
                 "Get the complete definition, schema, metadata, examples, and evidenced availability for one capability.",
                 _schema({"name": {"type": "string", "minLength": 1}}, ["name"]),
-                lambda _c, a: self._capability_get(a),
+                lambda _c, a, client_id: self._capability_get(a, auth_required=client_id != "static-mcp"),
+                needs_client_id=True,
             ),
             "capability_list": Tool(
                 "capability_list",
@@ -1641,7 +1642,7 @@ class ToolRegistry:
             "evidence": "downstream_manager",
         }
 
-    def _capability_get(self, args: dict[str, Any]) -> dict[str, Any]:
+    def _capability_get(self, args: dict[str, Any], *, auth_required: bool = True) -> dict[str, Any]:
         self.refresh_catalog()
         name = args.get("name")
         with self._catalog_lock:
@@ -1651,7 +1652,7 @@ class ToolRegistry:
             entry = self._catalog_entry_by_name[name]
             result = {
                 "catalog_version": self.catalog_version,
-                "tool": tool.definition(auth_required=True),
+                "tool": tool.definition(auth_required=auth_required),
                 "canonical_name": name,
                 "source": entry.source,
                 "backend_id": tool.backend_id,
