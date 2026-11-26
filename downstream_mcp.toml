@@ -62,6 +62,41 @@ allow_tools = [
   "wps_word_close",
 ]
 
+# ── Pinky real-phone MCP (stdio) ───────────────────────────────
+# The installed macOS binary is an MCP stdio shim for Pinky's running gateway.
+# Pinky's own phone/session approvals and credential safeguards remain in force.
+# Restrict the publicly reachable 4GPT facade to the tools needed for
+# interactive observation and phone UI debugging; no app installation, file
+# transfer, autonomous task execution or device-setting mutation by default.
+[downstream_mcp.pinky]
+enabled = true
+transport = "stdio"
+command = "/Applications/Pinky.app/Contents/MacOS/Pinky"
+args = ["mcp"]
+namespace = "pinky"
+startup_timeout = 20.0
+call_timeout = 65.0
+allow_tools = [
+  "phone_connect",
+  "phone_observe",
+  "phone_apps",
+  "phone_launch",
+  "phone_tap",
+  "phone_type",
+  "phone_swipe",
+  "phone_key",
+  "phone_drag",
+  "phone_pinch",
+  "phone_batch",
+  "phone_read_list",
+  "phone_wait_for",
+  "phone_handoff",
+  "phone_release",
+  "phone_request_approval",
+  "phone_logs",
+  "phone_traffic",
+]
+
 # ── Example: Future downstream MCP (disabled) ─────────────────
 # [downstream_mcp.filesystem]
 # enabled = false
