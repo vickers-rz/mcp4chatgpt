@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import hmac
 import json
 import re
 import ssl
@@ -297,7 +296,7 @@ class Handler(BaseHTTPRequestHandler):
         # A static connector may probe both origin-wide discovery documents
         # even after a successful initialize. Advertise OAuth only for /mcp.
         issuer_metadata_path = "/.well-known/oauth-authorization-server"
-        if config.static_mcp_token:
+        if config.static_auth_enabled:
             issuer_metadata_path += urlparse(issuer(config)).path
         if parsed.path == issuer_metadata_path:
             _json_response(self, 200, metadata(self.server.config))
@@ -306,7 +305,7 @@ class Handler(BaseHTTPRequestHandler):
             _protected_resource_metadata_url(self.server.config)
         ).path
         if parsed.path == protected_metadata_path or (
-            not config.static_mcp_token and parsed.path == "/.well-known/oauth-protected-resource"
+            not config.static_auth_enabled and parsed.path == "/.well-known/oauth-protected-resource"
         ):
             _json_response(self, 200, protected_resource_metadata(self.server.config))
             return
@@ -395,22 +394,22 @@ class Handler(BaseHTTPRequestHandler):
 
     def _client_context(self) -> tuple[str, bool, str]:
         config = self.server.config
-        static_token = config.static_mcp_token
         parsed = urlparse(self.path)
         static_only = parsed.path == _STATIC_MCP_PATH
         auth = self.headers.get("Authorization", "")
         if auth.startswith("Bearer "):
             bearer = auth.removeprefix("Bearer ").strip()
-            if static_token and hmac.compare_digest(bearer.encode(), static_token.encode()):
-                return "static-mcp", False, "static_bearer"
+            if principal := config.static_principal(bearer):
+                return principal, False, "static_bearer"
             if not static_only:
                 return verify_token(config, bearer), True, "bearer"
-        if static_token:
+        if config.static_auth_enabled:
             query_tokens = parse_qs(parsed.query, keep_blank_values=True).get("mcp_token")
             if query_tokens is not None:
-                if len(query_tokens) != 1 or not hmac.compare_digest(query_tokens[0].encode(), static_token.encode()):
+                principal = config.static_principal(query_tokens[0]) if len(query_tokens) == 1 else None
+                if principal is None:
                     raise ValueError("Invalid MCP URL token.")
-                return "static-mcp", False, "static_query"
+                return principal, False, "static_query"
         if static_only:
             raise ValueError("Static MCP token required.")
         if config.local_auth_disabled and _is_local_request(self):

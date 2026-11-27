@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hmac
 import os
 import re
 import secrets
@@ -44,6 +45,21 @@ def _host_from_url(value: str) -> str:
     return (parsed.hostname or "").lower()
 
 
+def _static_clients(raw: str, legacy_token: str, secret: str) -> tuple[tuple[str, str], ...]:
+    if not raw:
+        return ()
+    clients: dict[str, str] = {}
+    used_tokens = {legacy_token, secret}
+    for entry in raw.split(","):
+        name, _, token = entry.strip().partition("=")
+        if (not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", name) or name in clients
+                or not re.fullmatch(r"[A-Za-z0-9_-]{32,}", token) or token in used_tokens):
+            raise ValueError("MCP_STATIC_CLIENTS requires unique names and separate URL-safe tokens of at least 32 characters.")
+        clients[name] = token
+        used_tokens.add(token)
+    return tuple(clients.items())
+
+
 @dataclass(frozen=True)
 class Config:
     public_base_url: str
@@ -77,6 +93,20 @@ class Config:
     tool_exposure: str = "full"
     personal_full_access: bool = False
     static_mcp_token: str = field(default="", repr=False)
+    static_mcp_clients: tuple[tuple[str, str], ...] = field(default=(), repr=False)
+
+    @property
+    def static_auth_enabled(self) -> bool:
+        return bool(self.static_mcp_token or self.static_mcp_clients)
+
+    def static_principal(self, credential: str) -> str | None:
+        candidate = credential.encode()
+        if self.static_mcp_token and hmac.compare_digest(candidate, self.static_mcp_token.encode()):
+            return "static-mcp"
+        for name, token in self.static_mcp_clients:
+            if hmac.compare_digest(candidate, token.encode()):
+                return f"static-mcp:{name}"
+        return None
 
     @property
     def mcp_url(self) -> str:
@@ -171,4 +201,5 @@ def load_config() -> Config:
         tool_exposure=tool_exposure,
         personal_full_access=personal_full_access,
         static_mcp_token=static_mcp_token,
+        static_mcp_clients=_static_clients(os.environ.get("MCP_STATIC_CLIENTS", ""), static_mcp_token, secret),
     )

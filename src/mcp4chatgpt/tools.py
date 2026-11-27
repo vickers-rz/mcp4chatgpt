@@ -1402,7 +1402,7 @@ class ToolRegistry:
                 "capability_get",
                 "Get the complete definition, schema, metadata, examples, and evidenced availability for one capability.",
                 _schema({"name": {"type": "string", "minLength": 1}}, ["name"]),
-                lambda _c, a, client_id: self._capability_get(a, auth_required=client_id != "static-mcp"),
+                lambda _c, a, client_id: self._capability_get(a, auth_required=client_id.partition(":")[0] != "static-mcp"),
                 needs_client_id=True,
             ),
             "capability_list": Tool(

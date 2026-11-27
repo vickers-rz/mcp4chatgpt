@@ -207,7 +207,16 @@ second authentication method on `/mcp`. Generate a separate token with
 remove it and restart to revoke it. Existing OAuth connections continue using
 their own credentials.
 
-With the static token enabled, OAuth clients discover the issuer at
+For separate task owners, set `MCP_STATIC_CLIENTS=phone=<token1>,desktop=<token2>`
+in the private environment, using a different generated token for each connector,
+and restart. Names use 1–64 letters, digits, underscores or hyphens. Keep the
+name when rotating its token to retain its tasks. Changing or reusing a name
+changes who owns that task history. Connections sharing a token share its owner.
+The optional legacy `MCP_STATIC_TOKEN` retains its existing shared tasks.
+Named clients start with separate task histories and use the same endpoints
+and token formats as the legacy credential.
+
+With static authentication enabled, OAuth clients discover the issuer at
 `/oauth` through `/.well-known/oauth-protected-resource/mcp`, then read
 `/.well-known/oauth-authorization-server/oauth`. Origin-wide discovery URLs
 return 404. A Gemini connection previously associated with OAuth can still
