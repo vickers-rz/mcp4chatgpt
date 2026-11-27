@@ -115,7 +115,7 @@ def _cleanup_expired_codes(now: float | None = None) -> None:
 
 def issuer(config: Config) -> str:
     base = config.public_base_url.rstrip("/")
-    return base + "/oauth" if config.static_mcp_token else base
+    return base + "/oauth" if config.static_auth_enabled else base
 
 
 def metadata(config: Config) -> dict[str, Any]:

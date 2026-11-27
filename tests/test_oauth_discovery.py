@@ -284,3 +284,78 @@ def test_static_mcp_token_query_and_header(tmp_path, enabled):
     finally:
         server.shutdown()
         server.server_close()
+
+
+@pytest.mark.parametrize("clients", [
+    "phone=" + "a" * 32 + ",desktop=" + "a" * 32,
+    "phone=" + "a" * 32 + ",phone=" + "b" * 32,
+    "phone=" + "L" * 32,
+    "phone=" + "S" * 32,
+    "phone=short",
+])
+def test_static_client_configuration_rejects_ambiguous_credentials(monkeypatch, clients):
+    from mcp4chatgpt.config import load_config
+
+    monkeypatch.setenv("MCP_STATIC_CLIENTS", clients)
+    monkeypatch.setenv("MCP_STATIC_TOKEN", "L" * 32)
+    monkeypatch.setenv("MCP_AUTH_SECRET", "S" * 32)
+    with pytest.raises(ValueError, match="MCP_STATIC_CLIENTS"):
+        load_config()
+
+
+def test_named_static_clients_own_independent_tasks_after_rotation(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from mcp4chatgpt.config import load_config
+    from test_coding_tasks import _init_repo
+
+    base = make_config(tmp_path)
+    repo = base.allowed_roots[0] / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    task = {"task_id": "shared-name", "cwd": str(repo)}
+    phone, desktop, replacement = ("a" * 48, "b" * 48, "c" * 48)
+    monkeypatch.setenv("MCP_STATIC_TOKEN", "")
+
+    @contextmanager
+    def running(phone_token):
+        monkeypatch.setenv("MCP_STATIC_CLIENTS", f"phone={phone_token},desktop={desktop}")
+        config = replace(base, static_mcp_clients=load_config().static_mcp_clients, personal_full_access=True)
+        server = create_server(config)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            yield server.server_address
+        finally:
+            server.shutdown()
+            thread.join()
+            server.server_close()
+
+    def call(addr, token, name, arguments, *, query=False):
+        path = "/gemini/mcp"
+        headers = {"Accept": "application/json"}
+        if query:
+            path += "?mcp_token=" + token
+        else:
+            headers["Authorization"] = "Bearer " + token
+        body = {"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": {"name": name, "arguments": arguments}}
+        status, _, response = _post_http(*addr, path, json.dumps(body).encode(), "application/json", headers)
+        return status, json.loads(response)
+
+    def success(addr, token, name, args, **kwargs):
+        status, body = call(addr, token, name, args, **kwargs)
+        assert status == 200
+        return body["result"]["structuredContent"]
+
+    with running(phone) as addr:
+        first = success(addr, phone, "coding_task_create", {**task, "paths": ["app.txt"]})
+        _, other = call(addr, desktop, "coding_task_inspect", task, query=True)
+        assert "coding_task_not_found" in json.dumps(other)
+        second = success(addr, desktop, "coding_task_create", {**task, "paths": ["app.txt"]}, query=True)
+        assert first["worktree_id"] != second["worktree_id"]
+        assert _get(f"http://{addr[0]}:{addr[1]}/.well-known/oauth-authorization-server/oauth")[0] == 200
+
+    with running(replacement) as addr:
+        assert call(addr, phone, "coding_task_inspect", task)[0] == 403
+        assert success(addr, replacement, "coding_task_inspect", task, query=True)["worktree_id"] == first["worktree_id"]
+        assert success(addr, desktop, "coding_task_inspect", task)["worktree_id"] == second["worktree_id"]
